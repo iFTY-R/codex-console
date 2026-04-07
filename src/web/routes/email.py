@@ -508,9 +508,11 @@ async def test_email_service(service_id: int):
                     details=email_service.get_service_info() if hasattr(email_service, 'get_service_info') else None
                 )
             else:
+                last_error = getattr(email_service, "last_error", None)
                 return ServiceTestResult(
                     success=False,
-                    message="服务连接失败"
+                    message=f"服务连接失败: {last_error}" if last_error else "服务连接失败",
+                    details={"error": last_error} if last_error else None,
                 )
 
         except Exception as e:

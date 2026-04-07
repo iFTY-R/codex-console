@@ -56,3 +56,8 @@ Thumbs.db
 # Project specific
 backups/
 /out/
+
+# Claude / OMC
+.claude/
+.omc/
+.omx/

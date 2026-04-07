@@ -650,7 +650,7 @@ async function testService(id) {
     try {
         const result = await api.post(`/email-services/${id}/test`);
         if (result.success) toast.success('测试成功');
-        else toast.error('测试失败: ' + (result.error || '未知错误'));
+        else toast.error('测试失败: ' + (result.message || result.error || '未知错误'));
     } catch (error) {
         toast.error('测试失败: ' + error.message);
     }
