@@ -1,18 +1,11 @@
-networks:
-  proxy-network:
-    external: true
-    name: ${PROXY_NETWORK:-1panel-network}
-
 services:
-  codex-console:
+  webui:
+    build:
+      context: .
+    image: codex-console:local
     container_name: codex-console
-    image: ${CODEX_CONSOLE_IMAGE:-ghcr.io/ifty-r/codex-console:latest}
-    cpus: "${WEBUI_CPUS:-1.0}"
-    mem_limit: ${WEBUI_MEM_LIMIT:-512m}
-    shm_size: ${WEBUI_SHM_SIZE:-1gb}
     init: true
-    networks:
-      - proxy-network
+    shm_size: ${WEBUI_SHM_SIZE:-1gb}
     ports:
       - "${WEBUI_BIND_IP:-127.0.0.1}:${WEBUI_PUBLISH_PORT:-1455}:1455"
     environment:
@@ -25,7 +18,6 @@ services:
       NOVNC_PORT: "6080"
       DEBUG: "${DEBUG:-0}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
-      TZ: "${TZ:-Asia/Shanghai}"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

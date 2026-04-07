@@ -219,6 +219,23 @@ cp .env.example .env
 | `APP_ACCESS_PASSWORD` | Web UI 访问密钥 | `admin123` |
 | `APP_DATABASE_URL` | 数据库连接字符串 | `data/database.db` |
 
+Docker Compose 常用变量如下：
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `WEBUI_ACCESS_PASSWORD` | Docker Web UI 访问密钥，必填 | 无 |
+| `PROXY_NETWORK` | 外部反向代理网络名称 | `1panel-network` |
+| `CODEX_CONSOLE_IMAGE` | 拉取的镜像地址 | `ghcr.io/ifty-r/codex-console:latest` |
+| `WEBUI_BIND_IP` | 宿主机绑定地址 | `127.0.0.1` |
+| `WEBUI_PUBLISH_PORT` | 宿主机发布端口 | `1455` |
+| `WEBUI_CPUS` | 容器 CPU 限制 | `1.0` |
+| `WEBUI_MEM_LIMIT` | 容器内存限制 | `512m` |
+| `WEBUI_SHM_SIZE` | 容器共享内存 | `1gb` |
+| `ENABLE_VNC` | 是否启用容器内 VNC/noVNC | `0` |
+| `NOVNC_BIND_IP` | noVNC 宿主机绑定地址 | `127.0.0.1` |
+| `NOVNC_PUBLISH_PORT` | noVNC 宿主机发布端口 | `6080` |
+| `APP_DATABASE_URL` | Docker 可选数据库连接字符串；不设置时自动使用挂载到 `/app/data` 的 SQLite | 不设置 |
+
 优先级：
 
 `命令行参数 > 环境变量(.env) > 数据库设置 > 默认值`
@@ -260,46 +277,144 @@ codex-console.exe --access-password mypassword
 
 ## Docker 部署
 
-### 使用 docker-compose
+当前仓库默认提供两份 Compose 配置：
+
+- `docker-compose.yml`：1Panel / 外部反向代理网络场景的生产基线，默认从 GHCR 拉镜像、不映射宿主机端口
+- `docker-compose.debug-vnc.yml`：临时排障覆盖，额外开启 noVNC 端口
+
+推荐的公网部署方式是：**容器仅监听宿主机回环地址，再由 1Panel / Nginx / Caddy 反向代理到 `127.0.0.1:1455`**。
+
+### 1) 准备 `.env`
+
+先复制示例文件并至少修改密码：
 
 ```bash
-docker-compose up -d
+cp .env.example .env
 ```
 
-你可以在 `docker-compose.yml` 中修改环境变量，比如端口和访问密码。  
-如果需要看“全自动绑卡”的可视化浏览器，打开：
-
-- noVNC: `http://127.0.0.1:6080`
-
-### 使用 docker run
+至少确认：
 
 ```bash
-docker run -d \
-  -p 1455:1455 \
-  -p 6080:6080 \
-  -e DISPLAY=:99 \
-  -e ENABLE_VNC=1 \
-  -e VNC_PORT=5900 \
-  -e NOVNC_PORT=6080 \
-  -e WEBUI_HOST=0.0.0.0 \
-  -e WEBUI_PORT=1455 \
-  -e WEBUI_ACCESS_PASSWORD=your_secure_password \
-  -v $(pwd)/data:/app/data \
-  --name codex-console \
-  ghcr.io/<yourname>/codex-console:latest
+WEBUI_ACCESS_PASSWORD=改成强密码
+PROXY_NETWORK=1panel-network
+CODEX_CONSOLE_IMAGE=ghcr.io/ifty-r/codex-console:latest
+WEBUI_BIND_IP=127.0.0.1
+WEBUI_PUBLISH_PORT=1455
+ENABLE_VNC=0
 ```
 
-说明：
+如果你要接远程 PostgreSQL，再补；如果你使用默认 SQLite，**不要设置** `APP_DATABASE_URL`：
 
-- `WEBUI_HOST`: 监听主机，默认 `0.0.0.0`
-- `WEBUI_PORT`: 监听端口，默认 `1455`
-- `WEBUI_ACCESS_PASSWORD`: Web UI 访问密码
-- `DEBUG`: 设为 `1` 或 `true` 可开启调试模式
-- `LOG_LEVEL`: 日志级别，例如 `info`、`debug`
+```bash
+APP_DATABASE_URL=postgresql://user:password@host:5432/dbname
+```
 
-注意：
+### 2) 首次启动（生产）
 
-`-v $(pwd)/data:/app/data` 很重要，这会把数据库和账号数据持久化到宿主机。否则容器一重启，数据也可能跟着表演消失术。
+```bash
+docker compose pull
+docker compose up -d
+```
+
+查看状态：
+
+```bash
+docker compose ps
+docker compose logs -f codex-console
+```
+
+生产基线默认行为：
+
+- 加入外部网络 `${PROXY_NETWORK:-1panel-network}`（可保留给同网络容器使用）
+- 将 Web UI 映射到 `${WEBUI_BIND_IP:-127.0.0.1}:${WEBUI_PUBLISH_PORT:-1455}`
+- 仍使用当前编排目录下的 `./data` 和 `./logs` 做持久化
+
+也就是说，1Panel 反向代理目标应指向：
+
+```text
+127.0.0.1:1455
+```
+
+### 3) 临时开启 noVNC 排障
+
+平时不建议对外暴露 noVNC。只有在需要看浏览器自动化现场时，再临时叠加调试覆盖：
+
+```bash
+docker compose pull
+docker compose -f docker-compose.yml -f docker-compose.debug-vnc.yml up -d
+```
+
+默认会额外发布：
+
+- noVNC: `127.0.0.1:${NOVNC_PUBLISH_PORT:-6080}`
+
+排障结束后，回到生产基线：
+
+```bash
+docker compose up -d
+```
+
+### 4) 常规更新
+
+建议每次更新前先备份数据目录：
+
+```bash
+cp -r data "data.bak.$(date +%F-%H%M%S)"
+cp -r logs "logs.bak.$(date +%F-%H%M%S)"
+```
+
+然后更新：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+这个项目当前启动时会执行数据库初始化和轻量迁移逻辑，所以常规升级通常直接拉取新镜像并启动即可。  
+如果后续版本开始正式使用 Alembic 迁移文件，请以 Release / README 的升级说明为准。
+
+### 5) 回滚
+
+如果更新后异常：
+
+```bash
+docker compose up -d
+```
+
+如果你使用固定版本标签，也可以把 `.env` 里的 `CODEX_CONSOLE_IMAGE` 改回旧 tag 后再执行 `docker compose up -d`。如果问题与数据库结构或数据内容有关，再恢复之前备份的 `data/`。
+
+### 6) 常用维护命令
+
+```bash
+# 停止
+docker compose down
+
+# 重启
+docker compose restart
+
+# 查看最后 200 行日志
+docker compose logs --tail=200 codex-console
+
+# 校验 compose 展开结果
+docker compose config
+```
+
+### GitHub 自动构建镜像
+
+推荐流程：
+
+```bash
+# 开发机
+git add .
+git commit -m "..."
+git push origin master
+```
+
+GitHub Actions 会自动构建并推送到：
+
+```text
+ghcr.io/ifty-r/codex-console:latest
+```
 
 ## 使用远程 PostgreSQL
 

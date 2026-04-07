@@ -1,0 +1,8 @@
+services:
+  codex-console:
+    environment:
+      ENABLE_VNC: "1"
+    ports:
+      - "${NOVNC_BIND_IP:-127.0.0.1}:${NOVNC_PUBLISH_PORT:-6080}:6080"
+      # 如需使用 VNC 客户端直连可打开：
+      # - "${VNC_BIND_IP:-127.0.0.1}:${VNC_PUBLISH_PORT:-5900}:5900"
