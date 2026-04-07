@@ -880,7 +880,7 @@ def delete_sub2api_service(db: Session, service_id: int) -> bool:
 
 
 # ============================================================================
-# new-api 鏈嶅姟 CRUD
+# new-api 服务 CRUD
 # ============================================================================
 
 def create_new_api_service(
@@ -892,7 +892,7 @@ def create_new_api_service(
     enabled: bool = True,
     priority: int = 0,
 ) -> NewApiService:
-    """鍒涘缓 new-api 鏈嶅姟閰嶇疆"""
+    """创建 new-api 服务配置"""
     svc = NewApiService(
         name=name,
         api_url=api_url,
@@ -909,7 +909,7 @@ def create_new_api_service(
 
 
 def get_new_api_service_by_id(db: Session, service_id: int) -> Optional[NewApiService]:
-    """鎸?ID 鑾峰彇 new-api 鏈嶅姟"""
+    """按 ID 获取 new-api 服务"""
     return db.query(NewApiService).filter(NewApiService.id == service_id).first()
 
 
@@ -917,7 +917,7 @@ def get_new_api_services(
     db: Session,
     enabled: Optional[bool] = None,
 ) -> List[NewApiService]:
-    """鑾峰彇 new-api 鏈嶅姟鍒楄〃"""
+    """获取 new-api 服务列表"""
     query = db.query(NewApiService)
     if enabled is not None:
         query = query.filter(NewApiService.enabled == enabled)
@@ -929,7 +929,7 @@ def update_new_api_service(
     service_id: int,
     **kwargs,
 ) -> Optional[NewApiService]:
-    """鏇存柊 new-api 鏈嶅姟閰嶇疆"""
+    """更新 new-api 服务配置"""
     svc = get_new_api_service_by_id(db, service_id)
     if not svc:
         return None
@@ -942,7 +942,7 @@ def update_new_api_service(
 
 
 def delete_new_api_service(db: Session, service_id: int) -> bool:
-    """鍒犻櫎 new-api 鏈嶅姟閰嶇疆"""
+    """删除 new-api 服务配置"""
     svc = get_new_api_service_by_id(db, service_id)
     if not svc:
         return False
@@ -952,7 +952,7 @@ def delete_new_api_service(db: Session, service_id: int) -> bool:
 
 
 # ============================================================================
-# 璁″垝娉ㄥ唽浠诲姟 CRUD
+# 计划注册任务 CRUD
 # ============================================================================
 
 def create_scheduled_registration_job(
@@ -967,7 +967,7 @@ def create_scheduled_registration_job(
     timezone: str = 'local',
     status: str = 'idle',
 ) -> ScheduledRegistrationJob:
-    """鍒涘缓璁″垝娉ㄥ唽浠诲姟"""
+    """创建计划注册任务"""
     job = ScheduledRegistrationJob(
         job_uuid=job_uuid,
         name=name,
@@ -986,12 +986,12 @@ def create_scheduled_registration_job(
 
 
 def get_scheduled_registration_job_by_uuid(db: Session, job_uuid: str) -> Optional[ScheduledRegistrationJob]:
-    """鎸?UUID 鑾峰彇璁″垝娉ㄥ唽浠诲姟"""
+    """按 UUID 获取计划注册任务"""
     return db.query(ScheduledRegistrationJob).filter(ScheduledRegistrationJob.job_uuid == job_uuid).first()
 
 
 def get_scheduled_registration_job_by_id(db: Session, job_id: int) -> Optional[ScheduledRegistrationJob]:
-    """鎸?ID 鑾峰彇璁″垝娉ㄥ唽浠诲姟"""
+    """按 ID 获取计划注册任务"""
     return db.query(ScheduledRegistrationJob).filter(ScheduledRegistrationJob.id == job_id).first()
 
 
@@ -1001,7 +1001,7 @@ def get_scheduled_registration_jobs(
     skip: int = 0,
     limit: int = 100,
 ) -> List[ScheduledRegistrationJob]:
-    """鑾峰彇璁″垝娉ㄥ唽浠诲姟鍒楄〃"""
+    """获取计划注册任务列表"""
     query = db.query(ScheduledRegistrationJob)
     if enabled is not None:
         query = query.filter(ScheduledRegistrationJob.enabled == enabled)
@@ -1009,7 +1009,7 @@ def get_scheduled_registration_jobs(
 
 
 def get_due_scheduled_registration_jobs(db: Session, now: datetime) -> List[ScheduledRegistrationJob]:
-    """鑾峰彇宸插埌鏈熺殑璁″垝娉ㄥ唽浠诲姟"""
+    """获取已到期的计划注册任务"""
     return db.query(ScheduledRegistrationJob).filter(
         ScheduledRegistrationJob.enabled == True,
         ScheduledRegistrationJob.is_running == False,
@@ -1019,7 +1019,7 @@ def get_due_scheduled_registration_jobs(db: Session, now: datetime) -> List[Sche
 
 
 def get_running_scheduled_registration_jobs(db: Session) -> List[ScheduledRegistrationJob]:
-    """鑾峰彇姝ｅ湪鎵ц鐨勮鍒掓敞鍐屼换鍔?"""
+    """获取正在执行的计划注册任务"""
     return db.query(ScheduledRegistrationJob).filter(
         ScheduledRegistrationJob.is_running == True,
     ).order_by(asc(ScheduledRegistrationJob.updated_at), asc(ScheduledRegistrationJob.id)).all()
@@ -1030,7 +1030,7 @@ def update_scheduled_registration_job(
     job_uuid: str,
     **kwargs,
 ) -> Optional[ScheduledRegistrationJob]:
-    """鏇存柊璁″垝娉ㄥ唽浠诲姟"""
+    """更新计划注册任务"""
     job = get_scheduled_registration_job_by_uuid(db, job_uuid)
     if not job:
         return None
@@ -1043,7 +1043,7 @@ def update_scheduled_registration_job(
 
 
 def delete_scheduled_registration_job(db: Session, job_uuid: str) -> bool:
-    """鍒犻櫎璁″垝娉ㄥ唽浠诲姟"""
+    """删除计划注册任务"""
     job = get_scheduled_registration_job_by_uuid(db, job_uuid)
     if not job:
         return False
@@ -1058,7 +1058,7 @@ def claim_scheduled_registration_job(
     next_run_at: Optional[datetime],
     now: datetime,
 ) -> Optional[ScheduledRegistrationJob]:
-    """鎶㈠崰璁″垝娉ㄥ唽浠诲姟鎵ц鏉?"""
+    """抢占计划注册任务执行锁"""
     updated = db.query(ScheduledRegistrationJob).filter(
         ScheduledRegistrationJob.job_uuid == job_uuid,
         ScheduledRegistrationJob.enabled == True,
@@ -1085,7 +1085,7 @@ def mark_scheduled_registration_job_success(
     batch_id: Optional[str] = None,
     status: str = 'scheduled',
 ) -> Optional[ScheduledRegistrationJob]:
-    """鏍囪璁″垝娉ㄥ唽浠诲姟鎵ц鎴愬姛"""
+    """标记计划注册任务执行成功"""
     job = get_scheduled_registration_job_by_uuid(db, job_uuid)
     if not job:
         return None
@@ -1108,7 +1108,7 @@ def mark_scheduled_registration_job_failure(
     error_message: str,
     now: datetime,
 ) -> Optional[ScheduledRegistrationJob]:
-    """鏍囪璁″垝娉ㄥ唽浠诲姟鎵ц澶辫触"""
+    """标记计划注册任务执行失败"""
     job = get_scheduled_registration_job_by_uuid(db, job_uuid)
     if not job:
         return None
@@ -1127,7 +1127,7 @@ def mark_scheduled_registration_job_skipped(
     job_uuid: str,
     error_message: str,
 ) -> Optional[ScheduledRegistrationJob]:
-    """鏍囪璁″垝娉ㄥ唽浠诲姟琚烦杩?"""
+    """标记计划注册任务被跳过"""
     job = get_scheduled_registration_job_by_uuid(db, job_uuid)
     if not job:
         return None

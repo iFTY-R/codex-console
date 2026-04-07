@@ -263,12 +263,12 @@ def batch_upload_to_cpa(
 
 
 def list_cpa_auth_files(api_url: str, api_token: str) -> Tuple[bool, Any, str]:
-    """鍒楀嚭杩滅 CPA auth-files 娓呭崟銆?"""
+    """列出远端 CPA auth-files 清单。"""
     if not api_url:
-        return False, None, "API URL 涓嶈兘涓虹┖"
+        return False, None, "API URL 不能为空"
 
     if not api_token:
-        return False, None, "API Token 涓嶈兘涓虹┖"
+        return False, None, "API Token 不能为空"
 
     list_url = _normalize_cpa_auth_files_url(api_url)
     headers = _build_cpa_headers(api_token)
@@ -285,16 +285,16 @@ def list_cpa_auth_files(api_url: str, api_token: str) -> Tuple[bool, Any, str]:
             return False, None, _extract_cpa_error(response)
         return True, response.json(), "ok"
     except cffi_requests.exceptions.ConnectionError as e:
-        return False, None, f"鏃犳硶杩炴帴鍒版湇鍔″櫒: {str(e)}"
+        return False, None, f"无法连接到服务器: {str(e)}"
     except cffi_requests.exceptions.Timeout:
-        return False, None, "杩炴帴瓒呮椂锛岃妫€鏌ョ綉缁滈厤缃?"
+        return False, None, "连接超时，请检查网络配置"
     except Exception as e:
-        logger.error("鑾峰彇 CPA auth-files 娓呭崟寮傚父: %s", e)
-        return False, None, f"鑾峰彇 auth-files 澶辫触: {str(e)}"
+        logger.error("获取 CPA auth-files 清单异常: %s", e)
+        return False, None, f"获取 auth-files 失败: {str(e)}"
 
 
 def count_ready_cpa_auth_files(payload: Any) -> int:
-    """缁熻鍙敤浜庤ˉ璐у垽鏂殑璁よ瘉鏂囦欢鏁伴噺銆?"""
+    """统计可用于补货判断的认证文件数量。"""
     if isinstance(payload, dict):
         files = payload.get("files", [])
     elif isinstance(payload, list):
