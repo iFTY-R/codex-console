@@ -138,9 +138,6 @@ class _RawImapClient:
                 if literal is None or len(literal) != literal_size:
                     raise RuntimeError(f"IMAP literal 读取不完整: {command}")
                 literals.append(literal)
-                crlf = self._reader.read(2)
-                if crlf != b"\r\n":
-                    raise RuntimeError(f"IMAP literal 结尾异常: {command}")
 
             if decoded.startswith(f"{tag} "):
                 parts = decoded.split(" ", 2)
@@ -206,6 +203,16 @@ class _RawImapClient:
                 return [int(part) for part in suffix.split() if part.isdigit()]
         return []
 
+    def search_all(self) -> List[int]:
+        result = self.execute("SEARCH ALL")
+        for line in result.lines:
+            if line.startswith("* SEARCH"):
+                suffix = line[len("* SEARCH") :].strip()
+                if not suffix:
+                    return []
+                return [int(part) for part in suffix.split() if part.isdigit()]
+        return []
+
     def fetch_rfc822(self, sequence_id: int) -> Tuple[Optional[int], bytes]:
         result = self.execute(f"FETCH {sequence_id} (UID RFC822)")
         if not result.literals:
@@ -219,6 +226,22 @@ class _RawImapClient:
                 break
 
         return uid, result.literals[0]
+
+    def fetch_message(self, sequence_id: int) -> Tuple[Optional[int], bytes, str]:
+        result = self.execute(f"FETCH {sequence_id} (UID FLAGS RFC822)")
+        if not result.literals:
+            raise RuntimeError(f"FETCH {sequence_id} 未返回邮件正文")
+
+        uid = None
+        flags_raw = ""
+        for line in result.lines:
+            uid_match = re.search(r"UID (\d+)", line)
+            if uid_match:
+                uid = int(uid_match.group(1))
+            if "FLAGS (" in line:
+                flags_raw = line
+
+        return uid, result.literals[0], flags_raw
 
     def mark_seen(self, sequence_id: int) -> None:
         self.execute(f"STORE {sequence_id} +FLAGS (\\Seen)", tolerate_fail=True)
@@ -339,6 +362,49 @@ class ImapMailService(LegacyImapMailService):
             logger.warning("IMAP(Coremail兼容) 健康检查失败: %s", e)
             self.update_status(False, str(e))
             return False
+        finally:
+            if client:
+                client.close()
+
+    def get_email_messages(self, email_id: str, **kwargs) -> list:
+        if not self._should_use_raw_compat():
+            return super().get_email_messages(email_id, **kwargs)
+
+        limit = max(1, min(50, int(kwargs.get("limit", 5) or 5)))
+        client: Optional[_RawImapClient] = None
+        messages = []
+        try:
+            client = self._connect_with_raw_compat()
+            client.select("INBOX")
+            message_ids = client.search_all()
+            if not message_ids:
+                self.update_status(True)
+                return []
+
+            target_ids = list(reversed(message_ids))[:limit]
+            for seq_id in target_ids:
+                uid, raw, flags_raw = client.fetch_message(seq_id)
+                msg = email_module.message_from_bytes(raw)
+                subject = self._decode_str(msg.get("Subject", ""))
+                from_addr = self._decode_str(msg.get("From", ""))
+                received_at = self._decode_str(msg.get("Date", ""))
+                body = self._get_text_body(msg)
+                snippet = re.sub(r"\s+", " ", body).strip()[:200]
+                messages.append({
+                    "id": str(uid or seq_id),
+                    "subject": subject,
+                    "from": from_addr,
+                    "received_at": received_at,
+                    "snippet": snippet,
+                    "is_seen": "\\Seen" in flags_raw,
+                })
+
+            self.update_status(True)
+            return messages
+        except Exception as e:
+            logger.warning("IMAP(Coremail兼容) 获取收件箱邮件失败: %s", e)
+            self.update_status(False, str(e))
+            return []
         finally:
             if client:
                 client.close()

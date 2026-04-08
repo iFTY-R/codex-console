@@ -7,6 +7,7 @@ let outlookServices = [];
 let customServices = [];  // 合并 moe_mail + temp_mail + cloudmail + duck_mail + freemail + imap_mail
 let selectedOutlook = new Set();
 let selectedCustom = new Set();
+let currentInboxServiceId = null;
 
 // DOM 元素
 const elements = {
@@ -85,6 +86,12 @@ const elements = {
     editOutlookForm: document.getElementById('edit-outlook-form'),
     closeEditOutlookModal: document.getElementById('close-edit-outlook-modal'),
     cancelEditOutlook: document.getElementById('cancel-edit-outlook'),
+    serviceInboxModal: document.getElementById('service-inbox-modal'),
+    closeServiceInboxModal: document.getElementById('close-service-inbox-modal'),
+    cancelServiceInboxBtn: document.getElementById('cancel-service-inbox-btn'),
+    refreshServiceInboxBtn: document.getElementById('refresh-service-inbox-btn'),
+    serviceInboxMeta: document.getElementById('service-inbox-meta'),
+    serviceInboxList: document.getElementById('service-inbox-list'),
 };
 
 const CUSTOM_SUBTYPE_LABELS = {
@@ -173,6 +180,16 @@ function initEventListeners() {
     elements.cancelEditOutlook.addEventListener('click', () => elements.editOutlookModal.classList.remove('active'));
     elements.editOutlookForm.addEventListener('submit', handleEditOutlook);
 
+    // 服务收件箱
+    elements.closeServiceInboxModal?.addEventListener('click', closeServiceInboxModal);
+    elements.cancelServiceInboxBtn?.addEventListener('click', closeServiceInboxModal);
+    elements.refreshServiceInboxBtn?.addEventListener('click', () => {
+        if (currentInboxServiceId) openServiceInbox(currentInboxServiceId);
+    });
+    elements.serviceInboxModal?.addEventListener('click', (e) => {
+        if (e.target === elements.serviceInboxModal) closeServiceInboxModal();
+    });
+
     // 临时邮箱配置
     elements.tempmailForm.addEventListener('submit', handleSaveTempmail);
     elements.testTempmailBtn.addEventListener('click', handleTestTempmail);
@@ -194,6 +211,73 @@ function toggleEmailMoreMenu(btn) {
 function closeEmailMoreMenu(el) {
     const menu = el.closest('.dropdown-menu');
     if (menu) menu.classList.remove('active');
+}
+
+function closeServiceInboxModal() {
+    currentInboxServiceId = null;
+    elements.serviceInboxModal?.classList.remove('active');
+}
+
+function renderInboxMessages(messages = []) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return `
+            <div class="empty-state">
+                <div class="empty-state-icon">📭</div>
+                <div class="empty-state-title">暂无邮件</div>
+                <div class="empty-state-description">当前服务收件箱未查到最近邮件</div>
+            </div>
+        `;
+    }
+    return messages.map((message) => `
+        <article class="inbox-message-item">
+            <div class="inbox-message-head">
+                <span>${escapeHtml(String(message.from || '-'))}</span>
+                <span>${escapeHtml(String(message.received_at || '-'))}${message.is_seen ? ' · 已读' : ' · 未读'}</span>
+            </div>
+            <div class="inbox-message-subject">${escapeHtml(String(message.subject || '-'))}</div>
+            <div class="inbox-message-snippet">${escapeHtml(String(message.snippet || '（无正文预览）'))}</div>
+        </article>
+    `).join('');
+}
+
+async function openServiceInbox(serviceId) {
+    currentInboxServiceId = Number(serviceId || 0) || null;
+    if (!currentInboxServiceId) {
+        toast.error('服务 ID 无效');
+        return;
+    }
+    if (elements.serviceInboxMeta) elements.serviceInboxMeta.textContent = '正在加载收件箱...';
+    if (elements.serviceInboxList) {
+        elements.serviceInboxList.innerHTML = `
+            <div class="empty-state">
+                <div class="skeleton skeleton-text"></div>
+                <div class="skeleton skeleton-text" style="width: 80%;"></div>
+            </div>
+        `;
+    }
+    elements.serviceInboxModal?.classList.add('active');
+    try {
+        const data = await api.get(`/email-services/${currentInboxServiceId}/inbox?limit=5`);
+        if (elements.serviceInboxMeta) {
+            const mailbox = data?.mailbox ? ` | 邮箱：${data.mailbox}` : '';
+            elements.serviceInboxMeta.textContent = `服务：${data?.service_name || '-'}（${data?.service_type || '-'}）${mailbox} | 最近 ${Number(data?.limit || 5)} 封`;
+        }
+        if (elements.serviceInboxList) {
+            elements.serviceInboxList.innerHTML = renderInboxMessages(data?.messages || []);
+        }
+    } catch (error) {
+        if (elements.serviceInboxMeta) elements.serviceInboxMeta.textContent = '加载失败';
+        if (elements.serviceInboxList) {
+            elements.serviceInboxList.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">⚠️</div>
+                    <div class="empty-state-title">收件箱加载失败</div>
+                    <div class="empty-state-description">${escapeHtml(error.message || '未知错误')}</div>
+                </div>
+            `;
+        }
+        toast.error('读取收件箱失败: ' + error.message);
+    }
 }
 
 // 切换添加表单子类型
@@ -278,6 +362,7 @@ async function loadOutlookServices() {
                             <div class="dropdown-menu" style="min-width:80px;">
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);toggleService(${service.id}, ${!service.enabled})">${service.enabled ? '禁用' : '启用'}</a>
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);testService(${service.id})">测试</a>
+                                <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);openServiceInbox(${service.id})">收件箱</a>
                             </div>
                         </div>
                         <button class="btn btn-danger btn-sm" onclick="deleteService(${service.id}, '${escapeHtml(service.name)}')">删除</button>
@@ -443,6 +528,7 @@ async function loadCustomServices() {
                             <div class="dropdown-menu" style="min-width:80px;">
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);toggleService(${service.id}, ${!service.enabled})">${service.enabled ? '禁用' : '启用'}</a>
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);testService(${service.id})">测试</a>
+                                <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);openServiceInbox(${service.id})">收件箱</a>
                             </div>
                         </div>
                         <button class="btn btn-danger btn-sm" onclick="deleteService(${service.id}, '${escapeHtml(service.name)}')">删除</button>

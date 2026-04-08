@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 
 from ...config.constants import AccountStatus
@@ -33,6 +33,7 @@ from ...core.timezone_utils import utcnow_naive
 from ...database import crud
 from ...database.models import Account
 from ...database.session import get_db
+from ..services import manual_login_service
 from ..task_manager import task_manager
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,31 @@ class ManualAccountCreateRequest(BaseModel):
     source: Optional[str] = "manual"
     subscription_type: Optional[str] = None
     metadata: Optional[dict] = None
+
+
+class ManualLoginStartRequest(BaseModel):
+    """账号管理手动登录启动请求。"""
+
+    email: str
+    password: str = ""
+    mode: str = "auto"
+    email_service_id: Optional[int] = None
+    session_token: str = ""
+    cookies: str = ""
+
+
+class ManualLoginTaskResponse(BaseModel):
+    success: bool = True
+    task: Dict[str, Any]
+
+
+class ManualLoginConfirmRequest(BaseModel):
+    overwrite: bool = Field(..., description="是否覆盖已有账号")
+
+
+class ManualLoginInboxCodeRequest(BaseModel):
+    email: str
+    email_service_id: Optional[int] = None
 
 
 class AccountImportItem(BaseModel):
@@ -734,6 +760,81 @@ async def create_manual_account(request: ManualAccountCreateRequest):
             raise HTTPException(status_code=500, detail="创建账号失败")
 
         return account_to_response(account)
+
+
+@router.post("/manual-login/start", response_model=ManualLoginTaskResponse)
+async def start_manual_login(request: ManualLoginStartRequest):
+    """启动账号管理手动登录任务。"""
+    email = str(request.email or "").strip().lower()
+    mode = str(request.mode or "auto").strip().lower() or "auto"
+    password = str(request.password or "").strip()
+    session_token = str(request.session_token or "").strip()
+    cookies = str(request.cookies or "").strip()
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    if mode not in {"auto", "semi_auto"}:
+        raise HTTPException(status_code=400, detail="mode 必须为 auto 或 semi_auto")
+    if mode == "auto" and not password:
+        raise HTTPException(status_code=400, detail="全自动模式必须填写密码")
+    if mode == "semi_auto":
+        if not password:
+            raise HTTPException(status_code=400, detail="半自动模式也必须填写密码")
+        if not (session_token or cookies):
+            raise HTTPException(status_code=400, detail="半自动模式请至少提供 session_token 或 cookies")
+
+    snapshot = manual_login_service.start_manual_login_task(
+        {
+            "email": email,
+            "password": password,
+            "mode": mode,
+            "email_service_id": request.email_service_id,
+            "session_token": session_token,
+            "cookies": cookies,
+        },
+        proxy=_get_proxy(),
+    )
+    return {"success": True, "task": snapshot}
+
+
+@router.get("/manual-login/tasks/{task_id}", response_model=ManualLoginTaskResponse)
+async def get_manual_login_task(task_id: str):
+    task = manual_login_service.get_manual_login_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="手动登录任务不存在")
+    return {"success": True, "task": task}
+
+
+@router.post("/manual-login/tasks/{task_id}/cancel")
+async def cancel_manual_login_task(task_id: str):
+    snapshot = manual_login_service.cancel_manual_login_task(task_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="手动登录任务不存在")
+    return {"success": True, "task": snapshot, "status": "cancelling"}
+
+
+@router.post("/manual-login/tasks/{task_id}/confirm-overwrite", response_model=ManualLoginTaskResponse)
+async def confirm_manual_login_overwrite(task_id: str, request: ManualLoginConfirmRequest):
+    try:
+        task = manual_login_service.confirm_manual_login_task(task_id, overwrite=bool(request.overwrite))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"success": True, "task": task}
+
+
+@router.post("/manual-login/inbox-code")
+async def get_manual_login_inbox_code(request: ManualLoginInboxCodeRequest):
+    email = str(request.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    try:
+        return manual_login_service.query_inbox_code(
+            email=email,
+            proxy=_get_proxy(),
+            email_service_id=request.email_service_id,
+        )
+    except RuntimeError as exc:
+        return {"success": False, "error": str(exc), "email": email}
 
 
 @router.post("/import")
@@ -2531,7 +2632,7 @@ async def get_account_inbox_code(account_id: int):
             code = svc.get_verification_code(
                 account.email,
                 email_id=account.email_service_id,
-                timeout=12
+                timeout=60
             )
         except Exception as e:
             return {"success": False, "error": str(e)}

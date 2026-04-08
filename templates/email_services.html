@@ -6,6 +6,41 @@
     <title>邮箱服务 - OpenAI 注册系统</title>
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📧</text></svg>">
+    <style>
+        .inbox-message-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 480px;
+            overflow-y: auto;
+        }
+        .inbox-message-item {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            background: var(--surface-hover);
+        }
+        .inbox-message-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+        .inbox-message-subject {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+        .inbox-message-snippet {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-secondary);
+            font-size: 0.84rem;
+            line-height: 1.55;
+        }
+    </style>
 </head>
 <body>
     {% include "partials/site_notice.html" %}
@@ -99,7 +134,7 @@
             </div>
 
             <!-- 自定义邮箱管理（含 MoeMail / TempMail / CloudMail / DuckMail） -->
-            <div class="card custom-email-services-card">
+            <div class="card custom-email-services-card table-dropdown-card">
                 <div class="card-header">
                     <h3>🔗 自定义邮箱服务</h3>
                     <button class="btn btn-primary btn-sm" id="add-custom-btn">➕ 添加服务</button>
@@ -136,7 +171,7 @@
             </div>
 
             <!-- Outlook 账户列表 -->
-            <div class="card">
+            <div class="card table-dropdown-card">
                 <div class="card-header">
                     <h3>📧 Outlook 账户列表</h3>
                     <button class="btn btn-danger btn-sm" id="batch-delete-outlook-btn" disabled>🗑️ 批量删除</button>
@@ -728,6 +763,28 @@
                         <button type="button" class="btn btn-secondary" id="cancel-edit-outlook">取消</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="service-inbox-modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>📬 服务收件箱</h3>
+                <button class="modal-close" id="close-service-inbox-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="service-inbox-meta" style="margin-bottom: 12px; color: var(--text-muted);">加载中...</div>
+                <div id="service-inbox-list" class="inbox-message-list">
+                    <div class="empty-state">
+                        <div class="skeleton skeleton-text"></div>
+                        <div class="skeleton skeleton-text" style="width: 80%;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="refresh-service-inbox-btn">刷新</button>
+                <button type="button" class="btn btn-secondary" id="cancel-service-inbox-btn">关闭</button>
             </div>
         </div>
     </div>

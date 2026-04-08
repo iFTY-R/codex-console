@@ -23,6 +23,10 @@ let isTaskPausing = false;
 let isTaskResuming = false;
 let pendingAccountListRefresh = null;
 let pendingAccountStatsRefresh = null;
+let manualLoginTaskId = '';
+let manualLoginPollTimer = null;
+let manualLoginOverwriteHandled = false;
+let manualLoginServicesLoaded = false;
 const TASK_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const activeBatchTasks = {
     refresh: null,
@@ -262,6 +266,27 @@ const elements = {
     closeAutoQuickRefreshModalBtn: document.getElementById('close-auto-quick-refresh-modal'),
     cancelAutoQuickRefreshBtn: document.getElementById('cancel-auto-quick-refresh-btn'),
     saveAutoQuickRefreshBtn: document.getElementById('save-auto-quick-refresh-btn'),
+    manualLoginOpenBtn: document.getElementById('manual-login-open-btn'),
+    manualLoginModal: document.getElementById('manual-login-modal'),
+    manualLoginCloseBtn: document.getElementById('close-manual-login-modal'),
+    manualLoginEmail: document.getElementById('manual-login-email'),
+    manualLoginPassword: document.getElementById('manual-login-password'),
+    manualLoginMode: document.getElementById('manual-login-mode'),
+    manualLoginModeHelp: document.getElementById('manual-login-mode-help'),
+    manualLoginEmailService: document.getElementById('manual-login-email-service'),
+    manualLoginSemiFields: document.getElementById('manual-login-semi-fields'),
+    manualLoginSessionToken: document.getElementById('manual-login-session-token'),
+    manualLoginCookies: document.getElementById('manual-login-cookies'),
+    manualLoginStartBtn: document.getElementById('manual-login-start-btn'),
+    manualLoginOpenOfficialBtn: document.getElementById('manual-login-open-official-btn'),
+    manualLoginInboxBtn: document.getElementById('manual-login-inbox-btn'),
+    manualLoginStopBtn: document.getElementById('manual-login-stop-btn'),
+    manualLoginResetBtn: document.getElementById('manual-login-reset-btn'),
+    manualLoginStatusPill: document.getElementById('manual-login-status-pill'),
+    manualLoginStagePill: document.getElementById('manual-login-stage-pill'),
+    manualLoginEmailPill: document.getElementById('manual-login-email-pill'),
+    manualLoginLog: document.getElementById('manual-login-log'),
+    manualLoginResult: document.getElementById('manual-login-result'),
 };
 
 // 初始化
@@ -275,6 +300,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
     updateBatchButtons();  // 初始化按钮状态
     renderSelectAllBanner();
+    updateManualLoginModeUI();
+    resetManualLoginRuntime();
 });
 
 // 事件监听
@@ -421,6 +448,20 @@ function initEventListeners() {
         }
     });
 
+    elements.manualLoginOpenBtn?.addEventListener('click', openManualLoginModal);
+    elements.manualLoginCloseBtn?.addEventListener('click', closeManualLoginModal);
+    elements.manualLoginModal?.addEventListener('click', (e) => {
+        if (e.target === elements.manualLoginModal) {
+            closeManualLoginModal();
+        }
+    });
+    elements.manualLoginMode?.addEventListener('change', updateManualLoginModeUI);
+    elements.manualLoginStartBtn?.addEventListener('click', startManualLoginTask);
+    elements.manualLoginOpenOfficialBtn?.addEventListener('click', openManualLoginOfficialPage);
+    elements.manualLoginInboxBtn?.addEventListener('click', queryManualLoginInboxCode);
+    elements.manualLoginStopBtn?.addEventListener('click', stopManualLoginTask);
+    elements.manualLoginResetBtn?.addEventListener('click', resetManualLoginForm);
+
     // 点击其他地方关闭下拉菜单
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
@@ -550,6 +591,324 @@ async function openAutoQuickRefreshModal() {
 function closeAutoQuickRefreshModal() {
     autoQuickRefreshFormDirty = false;
     elements.autoQuickRefreshModal?.classList.remove('active');
+}
+
+function resetManualLoginRuntime() {
+    manualLoginTaskId = '';
+    manualLoginOverwriteHandled = false;
+    if (manualLoginPollTimer) {
+        clearTimeout(manualLoginPollTimer);
+        manualLoginPollTimer = null;
+    }
+    if (elements.manualLoginStatusPill) elements.manualLoginStatusPill.textContent = '状态：未开始';
+    if (elements.manualLoginStagePill) elements.manualLoginStagePill.textContent = '阶段：-';
+    if (elements.manualLoginEmailPill) elements.manualLoginEmailPill.textContent = '邮箱：-';
+    if (elements.manualLoginLog) elements.manualLoginLog.textContent = '等待任务启动...';
+    if (elements.manualLoginResult) elements.manualLoginResult.textContent = '暂无结果';
+    if (elements.manualLoginStopBtn) elements.manualLoginStopBtn.disabled = true;
+}
+
+function resetManualLoginForm() {
+    if (elements.manualLoginEmail) elements.manualLoginEmail.value = '';
+    if (elements.manualLoginPassword) elements.manualLoginPassword.value = '';
+    if (elements.manualLoginMode) elements.manualLoginMode.value = 'auto';
+    if (elements.manualLoginEmailService) elements.manualLoginEmailService.value = '';
+    if (elements.manualLoginSessionToken) elements.manualLoginSessionToken.value = '';
+    if (elements.manualLoginCookies) elements.manualLoginCookies.value = '';
+    updateManualLoginModeUI();
+    resetManualLoginRuntime();
+}
+
+function updateManualLoginModeUI() {
+    const mode = String(elements.manualLoginMode?.value || 'auto').trim().toLowerCase() || 'auto';
+    const isSemi = mode === 'semi_auto';
+    if (elements.manualLoginSemiFields) {
+        elements.manualLoginSemiFields.style.display = isSemi ? 'block' : 'none';
+    }
+    if (elements.manualLoginModeHelp) {
+        elements.manualLoginModeHelp.textContent = isSemi
+            ? '半自动：可先打开 GPT 官方登录页，完成登录后粘贴 session_token 或 cookies 保存结果。'
+            : '全自动：系统直接走登录、查验证码并补全会话。';
+    }
+    if (elements.manualLoginStartBtn) {
+        elements.manualLoginStartBtn.textContent = isSemi ? '保存登录结果' : '开始登录';
+    }
+}
+
+async function loadManualLoginEmailServices() {
+    if (manualLoginServicesLoaded && elements.manualLoginEmailService?.options?.length > 1) return;
+    const select = elements.manualLoginEmailService;
+    if (!select) return;
+    try {
+        const data = await api.get('/email-services?enabled_only=true', {
+            requestKey: 'accounts:manual-login:email-services',
+            cancelPrevious: true,
+            timeoutMs: 15000,
+            retry: 1,
+        });
+        const services = Array.isArray(data?.services) ? data.services : [];
+        select.innerHTML = '<option value="">自动匹配</option>' + services.map((service) => {
+            const id = Number(service?.id || 0);
+            const type = String(service?.service_type || '').trim();
+            const name = String(service?.name || type || `#${id}`).trim();
+            return `<option value="${id}">${escapeHtml(name)}${type ? `（${escapeHtml(type)}）` : ''}</option>`;
+        }).join('');
+        manualLoginServicesLoaded = true;
+    } catch (error) {
+        toast.error(`加载邮箱服务失败: ${formatErrorMessage(error)}`);
+    }
+}
+
+async function openManualLoginModal() {
+    await loadManualLoginEmailServices();
+    updateManualLoginModeUI();
+    elements.manualLoginModal?.classList.add('active');
+}
+
+function closeManualLoginModal() {
+    elements.manualLoginModal?.classList.remove('active');
+}
+
+function renderManualLoginResult(task = {}) {
+    const result = task?.result || {};
+    const preview = result?.preview || {};
+    if (task?.status === 'waiting_push_auth') {
+        return `
+            <div><strong>需要人工完成额外验证</strong></div>
+            <div style="margin-top:6px;">页面类型：${escapeHtml(String(result?.page_type || '-'))}</div>
+            <div>当前阶段：${escapeHtml(String(result?.stage || '-'))}</div>
+            <div style="margin-top:8px;">请点击“打开 GPT 官方登录页”，在官方页面完成 Push/设备确认后，再切换到半自动模式保存 session_token 或 cookies。</div>
+        `;
+    }
+    if (task?.status === 'waiting_confirm_overwrite' && preview && Object.keys(preview).length) {
+        return `
+            <div><strong>检测到同邮箱账号</strong>，等待确认是否覆盖</div>
+            <div style="margin-top:6px;">已有账号 ID：${escapeHtml(String(result?.existing_account_id || '-'))}</div>
+            <div>Account ID：${escapeHtml(String(preview?.account_id || '-'))}</div>
+            <div>Workspace ID：${escapeHtml(String(preview?.workspace_id || '-'))}</div>
+            <div>Session Token：${preview?.session_token_preview ? escapeHtml(preview.session_token_preview) : '未拿到'}</div>
+        `;
+    }
+    if (!result || Object.keys(result).length === 0) {
+        return '暂无结果';
+    }
+    return `
+        <div><strong>执行结果</strong></div>
+        <div style="margin-top:6px;">邮箱：${escapeHtml(String(result?.email || '-'))}</div>
+        <div>模式：${escapeHtml(String(result?.mode || '-'))}</div>
+        <div>动作：${escapeHtml(String(result?.account_action || '-'))}</div>
+        <div>账号记录 ID：${escapeHtml(String(result?.final_account_id || '-'))}</div>
+        <div>Account ID：${escapeHtml(String(result?.account_id || '-'))}</div>
+        <div>Workspace ID：${escapeHtml(String(result?.workspace_id || '-'))}</div>
+        <div>Session Token：${result?.session_token_saved ? '已保存' : '未保存'}</div>
+        <div>Access Token：${result?.access_token_saved ? '已保存' : '未保存'}</div>
+        <div>Refresh Token：${result?.refresh_token_saved ? '已保存' : '未保存'}</div>
+        <div>Cookies：${result?.cookies_saved ? '已保存' : '未保存'}</div>
+    `;
+}
+
+function updateManualLoginTaskView(task = {}) {
+    const status = String(task?.status || 'pending').trim().toLowerCase() || 'pending';
+    const stage = String(task?.progress?.stage || '-').trim() || '-';
+    const payload = task?.payload || {};
+    const details = Array.isArray(task?.details) ? task.details : [];
+    if (elements.manualLoginStatusPill) elements.manualLoginStatusPill.textContent = `状态：${status}`;
+    if (elements.manualLoginStagePill) elements.manualLoginStagePill.textContent = `阶段：${stage}`;
+    if (elements.manualLoginEmailPill) elements.manualLoginEmailPill.textContent = `邮箱：${payload?.email || elements.manualLoginEmail?.value || '-'}`;
+    if (elements.manualLoginLog) {
+        elements.manualLoginLog.textContent = details.length
+            ? details.map((item) => {
+                const time = String(item?.time || '').trim();
+                const level = String(item?.level || 'info').trim().toUpperCase();
+                const message = String(item?.message || '').trim();
+                return `${time} [${level}] ${message}`;
+            }).join('\n')
+            : '等待任务启动...';
+        elements.manualLoginLog.scrollTop = elements.manualLoginLog.scrollHeight;
+    }
+    if (elements.manualLoginResult) {
+        elements.manualLoginResult.innerHTML = renderManualLoginResult(task);
+    }
+    if (elements.manualLoginStopBtn) {
+        elements.manualLoginStopBtn.disabled = TASK_TERMINAL_STATUSES.has(status) || !manualLoginTaskId;
+    }
+}
+
+async function handleManualLoginOverwrite(task = {}) {
+    if (manualLoginOverwriteHandled || String(task?.status || '').trim().toLowerCase() !== 'waiting_confirm_overwrite') {
+        return;
+    }
+    manualLoginOverwriteHandled = true;
+    const preview = task?.result?.preview || {};
+    const confirmed = await confirm(
+        `邮箱 ${preview?.email || task?.payload?.email || ''} 已存在。\n\n` +
+        `是否用本次登录结果覆盖原账号？\n` +
+        `Account ID: ${preview?.account_id || '-'}\n` +
+        `Workspace ID: ${preview?.workspace_id || '-'}`
+    );
+    try {
+        const response = await api.post(`/accounts/manual-login/tasks/${manualLoginTaskId}/confirm-overwrite`, {
+            overwrite: Boolean(confirmed),
+        });
+        updateManualLoginTaskView(response?.task || {});
+        if (confirmed) {
+            toast.success('已覆盖更新账号');
+            refreshAccountsView({ settleDelayMs: 300 });
+        } else {
+            toast.warning('已保留原账号，本次登录结果未写回');
+        }
+    } catch (error) {
+        manualLoginOverwriteHandled = false;
+        toast.error(`处理覆盖确认失败: ${formatErrorMessage(error)}`);
+    }
+}
+
+async function pollManualLoginTask(taskId) {
+    if (!taskId) return;
+    try {
+        const response = await api.get(`/accounts/manual-login/tasks/${taskId}`, {
+            requestKey: `accounts:manual-login:${taskId}`,
+            cancelPrevious: true,
+            retry: 0,
+            timeoutMs: 30000,
+            silentNetworkError: true,
+            silentTimeoutError: true,
+            priority: 'low',
+        });
+        const task = response?.task || {};
+        updateManualLoginTaskView(task);
+        const status = String(task?.status || '').trim().toLowerCase();
+        if (status === 'waiting_confirm_overwrite') {
+            await handleManualLoginOverwrite(task);
+        }
+        if (status === 'waiting_push_auth') {
+            manualLoginPollTimer = null;
+            toast.warning(task?.message || '该账号需要额外的 Push 验证，请人工处理后继续');
+            return;
+        }
+        if (TASK_TERMINAL_STATUSES.has(status)) {
+            manualLoginPollTimer = null;
+            if (status === 'completed') {
+                toast.success(task?.message || '手动登录完成');
+                refreshAccountsView({ settleDelayMs: 300 });
+            } else if (status === 'failed') {
+                toast.error(task?.error || task?.message || '手动登录失败');
+            } else if (status === 'cancelled') {
+                toast.warning(task?.message || '手动登录已取消');
+            }
+            return;
+        }
+    } catch (error) {
+        toast.error(`轮询手动登录任务失败: ${formatErrorMessage(error)}`);
+        manualLoginPollTimer = null;
+        return;
+    }
+    manualLoginPollTimer = setTimeout(() => pollManualLoginTask(taskId), 1200);
+}
+
+async function startManualLoginTask() {
+    const email = String(elements.manualLoginEmail?.value || '').trim();
+    const password = String(elements.manualLoginPassword?.value || '').trim();
+    const mode = String(elements.manualLoginMode?.value || 'auto').trim().toLowerCase() || 'auto';
+    const emailServiceId = Number(elements.manualLoginEmailService?.value || 0) || null;
+    const sessionToken = String(elements.manualLoginSessionToken?.value || '').trim();
+    const cookies = String(elements.manualLoginCookies?.value || '').trim();
+    if (!email || !email.includes('@')) {
+        toast.warning('请先填写有效邮箱');
+        return;
+    }
+    if (!password) {
+        toast.warning('请先填写密码');
+        return;
+    }
+    if (mode === 'semi_auto' && !sessionToken && !cookies) {
+        toast.warning('半自动模式请粘贴 session_token 或 cookies');
+        return;
+    }
+
+    if (manualLoginPollTimer) {
+        clearTimeout(manualLoginPollTimer);
+        manualLoginPollTimer = null;
+    }
+    manualLoginOverwriteHandled = false;
+    if (elements.manualLoginLog) elements.manualLoginLog.textContent = '任务已提交，等待后端执行...';
+    if (elements.manualLoginResult) elements.manualLoginResult.textContent = '执行中...';
+    if (elements.manualLoginEmailPill) elements.manualLoginEmailPill.textContent = `邮箱：${email}`;
+    try {
+        const response = await api.post('/accounts/manual-login/start', {
+            email,
+            password,
+            mode,
+            email_service_id: emailServiceId,
+            session_token: sessionToken,
+            cookies,
+        }, {
+            requestKey: 'accounts:manual-login:start',
+            cancelPrevious: true,
+            timeoutMs: 20000,
+            retry: 0,
+        });
+        const task = response?.task || {};
+        manualLoginTaskId = String(task?.id || '').trim();
+        if (!manualLoginTaskId) {
+            throw new Error('后端未返回任务 ID');
+        }
+        updateManualLoginTaskView(task);
+        if (elements.manualLoginStopBtn) elements.manualLoginStopBtn.disabled = false;
+        pollManualLoginTask(manualLoginTaskId);
+    } catch (error) {
+        toast.error(`启动手动登录失败: ${formatErrorMessage(error)}`);
+    }
+}
+
+async function stopManualLoginTask() {
+    if (!manualLoginTaskId) return;
+    try {
+        const response = await api.post(`/accounts/manual-login/tasks/${manualLoginTaskId}/cancel`, {});
+        updateManualLoginTaskView(response?.task || {});
+        toast.warning('已提交停止请求');
+    } catch (error) {
+        toast.error(`停止任务失败: ${formatErrorMessage(error)}`);
+    }
+}
+
+async function openManualLoginOfficialPage() {
+    const loginUrl = 'https://chatgpt.com/auth/login';
+    try {
+        const data = await api.post('/payment/open-incognito', { url: loginUrl });
+        if (data?.success) {
+            toast.success('已打开 GPT 官方登录页（无痕）');
+            return;
+        }
+        window.open(loginUrl, '_blank', 'noopener,noreferrer');
+        toast.warning(data?.message || '未找到可用浏览器，已在当前浏览器打开');
+    } catch (error) {
+        window.open(loginUrl, '_blank', 'noopener,noreferrer');
+        toast.warning(`打开官方登录页失败，已降级当前浏览器: ${formatErrorMessage(error)}`);
+    }
+}
+
+async function queryManualLoginInboxCode() {
+    const email = String(elements.manualLoginEmail?.value || '').trim();
+    const emailServiceId = Number(elements.manualLoginEmailService?.value || 0) || null;
+    if (!email || !email.includes('@')) {
+        toast.warning('请先填写有效邮箱');
+        return;
+    }
+    try {
+        const result = await api.post('/accounts/manual-login/inbox-code', {
+            email,
+            email_service_id: emailServiceId,
+        });
+        if (result?.success && result?.code) {
+            copyToClipboard(String(result.code).trim());
+            toast.success(`${email} 最新验证码: ${result.code}（已复制）`, 8000);
+            return;
+        }
+        toast.error(`查询失败: ${result?.error || '未收到验证码'}`);
+    } catch (error) {
+        toast.error(`查询验证码失败: ${formatErrorMessage(error)}`);
+    }
 }
 
 async function saveAutoQuickRefreshSettings() {

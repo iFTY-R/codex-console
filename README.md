@@ -192,6 +192,11 @@
 - Python 3.10+
 - `uv`（推荐）或 `pip`
 
+```bash
+uv sync
+.\.venv\Scripts\python.exe webui.py 
+```
+
 ## 安装依赖
 
 ```bash

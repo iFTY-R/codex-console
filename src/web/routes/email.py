@@ -69,6 +69,16 @@ class ServiceTestResult(BaseModel):
     details: Optional[Dict[str, Any]] = None
 
 
+class InboxMessagesResponse(BaseModel):
+    success: bool
+    service_id: int
+    service_name: str
+    service_type: str
+    limit: int
+    mailbox: Optional[str] = None
+    messages: List[Dict[str, Any]] = []
+
+
 class OutlookBatchImportRequest(BaseModel):
     """Outlook 批量导入请求"""
     data: str  # 多行数据，每行格式: 邮箱----密码 或 邮箱----密码----client_id----refresh_token
@@ -130,6 +140,100 @@ def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
         filtered['has_oauth'] = True
 
     return filtered
+
+
+def _coerce_message_mailbox(message: Dict[str, Any], mailbox: str) -> bool:
+    if not mailbox:
+        return True
+    mailbox_lower = mailbox.strip().lower()
+    for key in ("to", "to_email", "email", "mailbox", "address", "receiver"):
+        value = str(message.get(key) or "").strip().lower()
+        if value and mailbox_lower in value:
+            return True
+    return False
+
+
+def _serialize_inbox_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    raw = dict(message or {})
+    subject = str(
+        raw.get("subject")
+        or raw.get("title")
+        or raw.get("subject_text")
+        or "-"
+    ).strip() or "-"
+    sender = str(
+        raw.get("from")
+        or raw.get("from_email")
+        or raw.get("source")
+        or raw.get("sender")
+        or "-"
+    ).strip() or "-"
+    received_at = str(
+        raw.get("received_at")
+        or raw.get("receivedAt")
+        or raw.get("created_at")
+        or raw.get("createdAt")
+        or raw.get("date")
+        or "-"
+    ).strip() or "-"
+    snippet = str(
+        raw.get("snippet")
+        or raw.get("text")
+        or raw.get("intro")
+        or raw.get("content")
+        or ""
+    ).strip()
+    if len(snippet) > 240:
+        snippet = snippet[:240] + "..."
+    return {
+        "id": str(raw.get("id") or raw.get("message_id") or raw.get("uuid") or ""),
+        "subject": subject,
+        "from": sender,
+        "received_at": received_at,
+        "snippet": snippet,
+        "is_seen": bool(raw.get("is_seen") or raw.get("seen") or raw.get("read")),
+    }
+
+
+def _resolve_service_inbox(service_type: EmailServiceType, email_service) -> tuple[Optional[str], List[Dict[str, Any]]]:
+    mailbox = ""
+    config_email = str(getattr(email_service, "email_addr", "") or "").strip()
+    if config_email:
+        mailbox = config_email
+
+    if service_type == EmailServiceType.IMAP_MAIL:
+        messages = email_service.get_email_messages(mailbox or config_email, limit=5)
+        return mailbox or config_email, messages
+
+    list_kwargs = {"limit": 5}
+    emails = email_service.list_emails(**list_kwargs)
+    if not isinstance(emails, list):
+        emails = []
+
+    if not mailbox:
+        for item in emails:
+            candidate = str(item.get("email") or item.get("address") or item.get("id") or "").strip()
+            if candidate:
+                mailbox = candidate
+                break
+
+    if not hasattr(email_service, "get_email_messages"):
+        return mailbox or None, []
+
+    for item in emails:
+        email_id = str(item.get("id") or item.get("service_id") or item.get("email") or "").strip()
+        candidate_mailbox = str(item.get("email") or item.get("address") or "").strip()
+        if not email_id:
+            continue
+        if mailbox and candidate_mailbox and candidate_mailbox.strip().lower() != mailbox.strip().lower():
+            continue
+        messages = email_service.get_email_messages(email_id, limit=5) or []
+        if mailbox and messages:
+            filtered = [msg for msg in messages if _coerce_message_mailbox(msg, mailbox)]
+            return mailbox or candidate_mailbox, filtered if filtered else messages
+        return candidate_mailbox or mailbox or None, messages
+
+    return mailbox or None, []
 
 
 def service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
@@ -406,6 +510,48 @@ async def get_email_service_full(service_id: int):
             "created_at": service.created_at.isoformat() if service.created_at else None,
             "updated_at": service.updated_at.isoformat() if service.updated_at else None,
         }
+
+
+@router.get("/{service_id}/inbox", response_model=InboxMessagesResponse)
+async def get_email_service_inbox(
+    service_id: int,
+    limit: int = Query(5, ge=1, le=20, description="默认返回最近前几封邮件"),
+):
+    """读取邮箱服务收件箱，默认返回最近前 5 封邮件。"""
+    with get_db() as db:
+        service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
+        if not service:
+            raise HTTPException(status_code=404, detail="服务不存在")
+
+        try:
+            service_type = EmailServiceType(service.service_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"不支持的邮箱服务类型: {service.service_type}")
+
+        config = normalize_email_service_config(service.service_type, service.config)
+        try:
+            email_service = EmailServiceFactory.create(service_type, config, name=f"inbox_{service.id}")
+        except Exception as exc:
+            logger.error(f"初始化邮箱服务收件箱失败: {exc}")
+            raise HTTPException(status_code=400, detail=f"初始化邮箱服务失败: {exc}")
+
+        try:
+            mailbox, messages = _resolve_service_inbox(service_type, email_service)
+            serialized = [_serialize_inbox_message(message) for message in (messages or [])][:limit]
+            return InboxMessagesResponse(
+                success=True,
+                service_id=service.id,
+                service_name=service.name,
+                service_type=service.service_type,
+                limit=limit,
+                mailbox=mailbox or None,
+                messages=serialized,
+            )
+        except NotImplementedError:
+            raise HTTPException(status_code=400, detail="当前邮箱服务暂不支持收件箱预览")
+        except Exception as exc:
+            logger.error(f"读取邮箱服务收件箱失败: {exc}")
+            raise HTTPException(status_code=500, detail=f"读取收件箱失败: {exc}")
 
 
 @router.post("", response_model=EmailServiceResponse)

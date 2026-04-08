@@ -243,6 +243,78 @@
         .auto-quick-refresh-log-item.level-info .log-level {
             color: var(--primary-color);
         }
+        .manual-login-grid {
+            display: grid;
+            grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.1fr);
+            gap: 16px;
+        }
+        .manual-login-panel {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            background: var(--surface-hover);
+        }
+        .manual-login-panel h4 {
+            margin: 0 0 12px;
+        }
+        .manual-login-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+        .manual-login-status {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .manual-login-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            background: rgba(59, 130, 246, 0.12);
+            color: var(--primary-color);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        .manual-login-log {
+            min-height: 320px;
+            max-height: 420px;
+            overflow-y: auto;
+            border-radius: 8px;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 12px;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .manual-login-result {
+            margin-top: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            padding: 12px;
+            background: var(--surface);
+            font-size: 0.84rem;
+            color: var(--text-secondary);
+        }
+        .manual-login-semi-only {
+            display: none;
+        }
+        .manual-login-mode-help {
+            margin-top: 6px;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+        @media (max-width: 960px) {
+            .manual-login-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -364,6 +436,9 @@
                         <button class="btn btn-danger" id="batch-delete-btn" disabled>
                             🗑️ 批量删除
                         </button>
+                        <button class="btn btn-primary" id="manual-login-open-btn" title="手动登录工作台">
+                            🔐 手动登录
+                        </button>
                         <div class="dropdown">
                             <button class="btn btn-primary" id="export-btn">
                                 📥 导出
@@ -384,7 +459,7 @@
             </div>
 
             <!-- 账号列表 -->
-            <div class="card">
+            <div class="card table-dropdown-card">
                 <div class="card-body" style="padding: 0;">
                     <div class="table-container">
                         <table class="data-table">
@@ -555,6 +630,79 @@
             <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn btn-secondary" id="cancel-auto-quick-refresh-btn">取消</button>
                 <button class="btn btn-primary" id="save-auto-quick-refresh-btn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="manual-login-modal">
+        <div class="modal-content" style="max-width: 1120px;">
+            <div class="modal-header">
+                <h3>🔐 手动登录工作台</h3>
+                <button class="modal-close" id="close-manual-login-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="manual-login-grid">
+                    <section class="manual-login-panel">
+                        <h4>登录参数</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="manual-login-email">邮箱</label>
+                                <input id="manual-login-email" type="text" class="form-input" placeholder="name@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="manual-login-password">密码</label>
+                                <input id="manual-login-password" type="password" class="form-input" placeholder="请输入密码">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="manual-login-mode">模式</label>
+                                <select id="manual-login-mode" class="form-select">
+                                    <option value="auto" selected>全自动</option>
+                                    <option value="semi_auto">半自动</option>
+                                </select>
+                                <div class="manual-login-mode-help" id="manual-login-mode-help">
+                                    全自动：系统直接走登录、查验证码并补全会话。
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="manual-login-email-service">邮箱服务</label>
+                                <select id="manual-login-email-service" class="form-select">
+                                    <option value="">自动匹配</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="manual-login-semi-only" id="manual-login-semi-fields">
+                            <div class="form-group">
+                                <label for="manual-login-session-token">Session Token（半自动）</label>
+                                <textarea id="manual-login-session-token" rows="3" class="form-input" placeholder="手动登录完成后可粘贴 __Secure-next-auth.session-token"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="manual-login-cookies">Cookies（可选）</label>
+                                <textarea id="manual-login-cookies" rows="3" class="form-input" placeholder="可选：粘贴完整 cookies，系统会尝试提取 session_token"></textarea>
+                            </div>
+                        </div>
+                        <div class="manual-login-actions">
+                            <button class="btn btn-primary" id="manual-login-start-btn">开始登录</button>
+                            <button class="btn btn-secondary" id="manual-login-open-official-btn">打开 GPT 官方登录页</button>
+                            <button class="btn btn-secondary" id="manual-login-inbox-btn">查询验证码</button>
+                            <button class="btn btn-danger" id="manual-login-stop-btn" disabled>停止任务</button>
+                            <button class="btn btn-secondary" id="manual-login-reset-btn">清空</button>
+                        </div>
+                    </section>
+                    <section class="manual-login-panel">
+                        <h4>监控台</h4>
+                        <div class="manual-login-status">
+                            <span class="manual-login-pill" id="manual-login-status-pill">状态：未开始</span>
+                            <span class="manual-login-pill" id="manual-login-stage-pill">阶段：-</span>
+                            <span class="manual-login-pill" id="manual-login-email-pill">邮箱：-</span>
+                        </div>
+                        <div class="manual-login-log" id="manual-login-log">等待任务启动...</div>
+                        <div class="manual-login-result" id="manual-login-result">
+                            暂无结果
+                        </div>
+                    </section>
+                </div>
             </div>
         </div>
     </div>

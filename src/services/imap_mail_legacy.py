@@ -212,6 +212,71 @@ class ImapMailService(BaseEmailService):
         """IMAP 单账号模式，返回固定地址"""
         return [{"email": self.email_addr, "id": self.email_addr}]
 
+    def get_email_messages(self, email_id: str, **kwargs) -> list:
+        """读取 IMAP 收件箱最近邮件，默认返回前 5 封。"""
+        limit = max(1, min(50, int(kwargs.get("limit", 5) or 5)))
+        mail = None
+        messages = []
+        try:
+            mail = self._connect()
+            status, _ = mail.select("INBOX")
+            if status != "OK":
+                return []
+
+            status, data = mail.search(None, "ALL")
+            if status != "OK" or not data or not data[0]:
+                return []
+
+            msg_ids = data[0].split()
+            target_ids = list(reversed(msg_ids))[:limit]
+            for msg_id in target_ids:
+                status, msg_data = mail.fetch(msg_id, "(RFC822 FLAGS)")
+                if status != "OK" or not msg_data:
+                    continue
+
+                raw = None
+                flags_raw = ""
+                for item in msg_data:
+                    if not isinstance(item, tuple):
+                        continue
+                    header = item[0]
+                    payload = item[1]
+                    if isinstance(payload, bytes):
+                        raw = payload
+                    if isinstance(header, bytes):
+                        flags_raw = header.decode(errors="ignore")
+
+                if not raw:
+                    continue
+
+                msg = email.message_from_bytes(raw)
+                subject = self._decode_str(msg.get("Subject", ""))
+                from_addr = self._decode_str(msg.get("From", ""))
+                received_at = self._decode_str(msg.get("Date", ""))
+                body = self._get_text_body(msg)
+                snippet = re.sub(r"\s+", " ", body).strip()[:200]
+                messages.append({
+                    "id": msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id),
+                    "subject": subject,
+                    "from": from_addr,
+                    "received_at": received_at,
+                    "snippet": snippet,
+                    "is_seen": "\\Seen" in flags_raw,
+                })
+
+            self.update_status(True)
+            return messages
+        except Exception as e:
+            logger.warning(f"IMAP 获取收件箱邮件失败: {e}")
+            self.update_status(False, e)
+            return []
+        finally:
+            if mail:
+                try:
+                    mail.logout()
+                except Exception:
+                    pass
+
     def delete_email(self, email_id: str) -> bool:
         """IMAP 模式无需删除逻辑"""
         return True

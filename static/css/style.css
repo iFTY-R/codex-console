@@ -577,6 +577,23 @@ body {
     overflow: visible;
 }
 
+/* 表格卡片允许“更多”下拉菜单完整溢出显示 */
+.card.table-dropdown-card {
+    overflow: visible;
+}
+
+.table-dropdown-card .table-container,
+.table-dropdown-card .data-table,
+.table-dropdown-card .data-table tbody,
+.table-dropdown-card .data-table tr,
+.table-dropdown-card .data-table td {
+    overflow: visible;
+}
+
+.table-dropdown-card .dropdown-menu {
+    z-index: 300;
+}
+
 /* ============================================
    表单元素
    ============================================ */
