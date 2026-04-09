@@ -819,6 +819,9 @@ async def confirm_manual_login_overwrite(task_id: str, request: ManualLoginConfi
         task = manual_login_service.confirm_manual_login_task(task_id, overwrite=bool(request.overwrite))
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("处理手动登录覆盖确认失败: task_id=%s", task_id)
+        raise HTTPException(status_code=500, detail=f"覆盖确认接口异常: {exc}")
     return {"success": True, "task": task}
 
 

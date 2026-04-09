@@ -559,6 +559,15 @@ class TaskManager:
             task = _domain_tasks.get(domain_key, {}).get(task_key)
             return self._domain_task_snapshot(task) if task else None
 
+    def get_domain_task_raw(self, domain: str, task_id: str) -> Optional[Dict[str, Any]]:
+        domain_key = str(domain or "").strip().lower()
+        task_key = str(task_id or "").strip()
+        if not domain_key or not task_key:
+            return None
+        with _domain_lock:
+            task = _domain_tasks.get(domain_key, {}).get(task_key)
+            return dict(task) if task else None
+
     def list_domain_tasks(self, domain: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         safe_limit = max(1, min(500, int(limit or 100)))
         with _domain_lock:

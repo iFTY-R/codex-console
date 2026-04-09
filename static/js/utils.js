@@ -609,6 +609,26 @@ const format = {
         });
     },
 
+    beijingDate(dateStr) {
+        if (!dateStr) return '-';
+        const raw = String(dateStr).trim();
+        if (!raw) return '-';
+        const normalized = /[zZ]$|[+\-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
+        const date = new Date(normalized);
+        if (Number.isNaN(date.getTime())) {
+            return this.date(dateStr);
+        }
+        return date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    },
+
     dateShort(dateStr) {
         if (!dateStr) return '-';
         const date = new Date(dateStr);
@@ -809,6 +829,34 @@ const storage = {
     }
 };
 
+function isModalVisible(modal) {
+    if (!modal || !modal.classList?.contains('modal')) return false;
+    return modal.classList.contains('active') || modal.classList.contains('show');
+}
+
+function readModalCloseFlag(modal, attrName, defaultValue = false) {
+    const raw = String(modal?.getAttribute?.(attrName) || '').trim().toLowerCase();
+    if (!raw) return defaultValue;
+    return ['true', '1', 'yes', 'on'].includes(raw);
+}
+
+function canModalCloseOnBackdrop(modal) {
+    return readModalCloseFlag(modal, 'data-backdrop-close', false);
+}
+
+function canModalCloseOnEscape(modal) {
+    if (modal?.hasAttribute?.('data-escape-close')) {
+        return readModalCloseFlag(modal, 'data-escape-close', false);
+    }
+    return canModalCloseOnBackdrop(modal);
+}
+
+function getTopActiveModal() {
+    const modals = Array.from(document.querySelectorAll('.modal.active, .modal.show'));
+    if (modals.length === 0) return null;
+    return modals[modals.length - 1];
+}
+
 // ============================================
 // 页面初始化
 // ============================================
@@ -816,6 +864,16 @@ const storage = {
 document.addEventListener('DOMContentLoaded', () => {
     // 初始化主题
     theme.applyTheme();
+
+    document.addEventListener('click', (e) => {
+        const modal = e.target;
+        if (!(modal instanceof HTMLElement)) return;
+        if (!modal.classList.contains('modal')) return;
+        if (!isModalVisible(modal)) return;
+        if (canModalCloseOnBackdrop(modal)) return;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
 
     // 全局键盘快捷键
     document.addEventListener('keydown', (e) => {
@@ -828,8 +886,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Escape: 关闭模态框
         if (e.key === 'Escape') {
-            const activeModal = document.querySelector('.modal.active');
-            if (activeModal) activeModal.classList.remove('active');
+            const activeModal = getTopActiveModal();
+            if (!activeModal) return;
+            if (!canModalCloseOnEscape(activeModal)) {
+                e.preventDefault();
+                return;
+            }
+            if (activeModal.classList.contains('active')) activeModal.classList.remove('active');
+            if (activeModal.classList.contains('show')) activeModal.classList.remove('show');
         }
     });
 });

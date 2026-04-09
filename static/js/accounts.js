@@ -23,6 +23,7 @@ let isTaskPausing = false;
 let isTaskResuming = false;
 let pendingAccountListRefresh = null;
 let pendingAccountStatsRefresh = null;
+let visibleAccountsById = new Map();
 let manualLoginTaskId = '';
 let manualLoginPollTimer = null;
 let manualLoginOverwriteHandled = false;
@@ -472,9 +473,7 @@ function initEventListeners() {
 
 function formatSchedulerTime(value) {
     if (!value) return '-';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '-';
-    return date.toLocaleString('zh-CN');
+    return format.beijingDate(value);
 }
 
 function renderAutoQuickRefreshRuntime(runtime) {
@@ -665,8 +664,83 @@ async function openManualLoginModal() {
     elements.manualLoginModal?.classList.add('active');
 }
 
+function fillManualLoginForm(account = {}) {
+    const email = String(account?.email || '').trim();
+    const password = String(account?.password || '').trim();
+    if (elements.manualLoginEmail) elements.manualLoginEmail.value = email;
+    if (elements.manualLoginPassword) elements.manualLoginPassword.value = password;
+    if (elements.manualLoginMode) elements.manualLoginMode.value = 'auto';
+    if (elements.manualLoginEmailService) elements.manualLoginEmailService.value = '';
+    if (elements.manualLoginSessionToken) elements.manualLoginSessionToken.value = '';
+    if (elements.manualLoginCookies) elements.manualLoginCookies.value = '';
+    updateManualLoginModeUI();
+    resetManualLoginRuntime();
+    if (elements.manualLoginEmailPill) {
+        elements.manualLoginEmailPill.textContent = `邮箱：${email || '-'}`;
+    }
+}
+
+async function reloginAccount(id) {
+    const accountId = Number(id || 0);
+    if (accountId <= 0) {
+        toast.warning('无效账号 ID');
+        return;
+    }
+
+    try {
+        await loadManualLoginEmailServices();
+        const account = visibleAccountsById.get(accountId) || await api.get(`/accounts/${accountId}`);
+        if (!account || !String(account.email || '').trim()) {
+            throw new Error('未找到账号信息');
+        }
+        fillManualLoginForm(account);
+        elements.manualLoginModal?.classList.add('active');
+        if (String(account.password || '').trim()) {
+            toast.info(`已为 ${account.email} 填充重新登录信息，请点击“开始登录”`, 4000);
+        } else {
+            toast.warning(`已打开 ${account.email} 的重新登录弹窗，但未找到已保存密码，请补充后再开始登录`, 6000);
+        }
+    } catch (error) {
+        toast.error(`打开重新登录弹窗失败: ${formatErrorMessage(error)}`);
+    }
+}
+
 function closeManualLoginModal() {
     elements.manualLoginModal?.classList.remove('active');
+}
+
+function renderManualLoginWorkspaceSummary(payload = {}) {
+    const selectedId = String(payload?.selected_workspace_id || payload?.workspace_id || '').trim();
+    const selectedName = String(payload?.selected_workspace_name || '').trim();
+    const list = Array.isArray(payload?.workspaces) ? payload.workspaces : [];
+    const workspaces = list.length > 0
+        ? list
+        : (selectedId ? [{ id: selectedId, name: selectedName, is_selected: true }] : []);
+
+    const selectedLabel = selectedId
+        ? `${selectedName ? `${escapeHtml(selectedName)}（` : ''}ID: ${escapeHtml(selectedId)}${selectedName ? '）' : ''}`
+        : '未获取到';
+
+    const rows = workspaces.length > 0
+        ? `<ul style="margin:6px 0 0 18px;padding:0;">${workspaces.map((item, index) => {
+            const id = String(item?.id || '').trim();
+            const name = String(item?.name || '').trim() || `Workspace ${index + 1}`;
+            const role = String(item?.role || item?.kind || item?.plan_type || '').trim();
+            const selected = Boolean(item?.is_selected) || (selectedId && id === selectedId);
+            const suffix = [
+                role ? `角色/类型: ${escapeHtml(role)}` : '',
+                selected ? '<strong>当前选中</strong>' : '',
+            ].filter(Boolean).join(' · ');
+            return `<li style="margin:4px 0;">${escapeHtml(name)}（ID: ${escapeHtml(id || '-')}${suffix ? `，${suffix}` : ''}）</li>`;
+        }).join('')}</ul>`
+        : '<div style="margin-top:6px;">可见列表：未获取到</div>';
+
+    return `
+        <div style="margin-top:8px;"><strong>Workspace</strong></div>
+        <div style="margin-top:6px;">当前选中：${selectedLabel}</div>
+        <div>可见数量：${workspaces.length}</div>
+        ${rows}
+    `;
 }
 
 function renderManualLoginResult(task = {}) {
@@ -685,8 +759,8 @@ function renderManualLoginResult(task = {}) {
             <div><strong>检测到同邮箱账号</strong>，等待确认是否覆盖</div>
             <div style="margin-top:6px;">已有账号 ID：${escapeHtml(String(result?.existing_account_id || '-'))}</div>
             <div>Account ID：${escapeHtml(String(preview?.account_id || '-'))}</div>
-            <div>Workspace ID：${escapeHtml(String(preview?.workspace_id || '-'))}</div>
             <div>Session Token：${preview?.session_token_preview ? escapeHtml(preview.session_token_preview) : '未拿到'}</div>
+            ${renderManualLoginWorkspaceSummary(preview)}
         `;
     }
     if (!result || Object.keys(result).length === 0) {
@@ -699,11 +773,11 @@ function renderManualLoginResult(task = {}) {
         <div>动作：${escapeHtml(String(result?.account_action || '-'))}</div>
         <div>账号记录 ID：${escapeHtml(String(result?.final_account_id || '-'))}</div>
         <div>Account ID：${escapeHtml(String(result?.account_id || '-'))}</div>
-        <div>Workspace ID：${escapeHtml(String(result?.workspace_id || '-'))}</div>
         <div>Session Token：${result?.session_token_saved ? '已保存' : '未保存'}</div>
         <div>Access Token：${result?.access_token_saved ? '已保存' : '未保存'}</div>
         <div>Refresh Token：${result?.refresh_token_saved ? '已保存' : '未保存'}</div>
         <div>Cookies：${result?.cookies_saved ? '已保存' : '未保存'}</div>
+        ${renderManualLoginWorkspaceSummary(result)}
     `;
 }
 
@@ -718,7 +792,7 @@ function updateManualLoginTaskView(task = {}) {
     if (elements.manualLoginLog) {
         elements.manualLoginLog.textContent = details.length
             ? details.map((item) => {
-                const time = String(item?.time || '').trim();
+                const time = format.beijingDate(item?.time);
                 const level = String(item?.level || 'info').trim().toUpperCase();
                 const message = String(item?.message || '').trim();
                 return `${time} [${level}] ${message}`;
@@ -1051,6 +1125,7 @@ async function loadAccounts() {
 
 // 渲染账号列表
 function renderAccounts(accounts) {
+    visibleAccountsById = new Map((Array.isArray(accounts) ? accounts : []).map((account) => [Number(account.id || 0), account]));
     if (accounts.length === 0) {
         elements.table.innerHTML = `
             <tr>
@@ -1100,7 +1175,7 @@ function renderAccounts(accounts) {
             <td>
                 ${renderSubscriptionStatus(account.subscription_type)}
             </td>
-            <td>${format.date(account.last_refresh) || '-'}</td>
+            <td>${format.beijingDate(account.last_refresh) || '-'}</td>
             <td>
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="viewAccount(${account.id})">详情</button>
@@ -1109,6 +1184,7 @@ function renderAccounts(accounts) {
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
+                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);reloginAccount(${account.id})">重新登录</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markAccountLabel(${account.id}, '${escapeHtml(account.account_label || account.role_tag || 'none')}')">标号</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
@@ -1924,7 +2000,7 @@ async function viewAccount(id) {
                 </div>
                 <div class="info-item">
                     <span class="label">最后刷新</span>
-                    <span class="value">${format.date(account.last_refresh) || '-'}</span>
+                    <span class="value">${format.beijingDate(account.last_refresh) || '-'}</span>
                 </div>
                 <div class="info-item" style="grid-column: span 2;">
                     <span class="label">Account ID</span>

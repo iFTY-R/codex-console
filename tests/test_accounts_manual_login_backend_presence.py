@@ -22,3 +22,10 @@ def test_manual_login_service_contains_core_flow_markers():
     assert '_sync_subscription_after_login' in content
     assert 'check_subscription_status_detail' in content
     assert 'PushAuthVerificationRequired' in content
+    assert '_collect_workspace_snapshot' in content
+    assert 'selected_workspace_name' in content
+    assert '"workspaces": list(workspace_snapshot.get("workspaces") or [])' in content
+    assert '/api/auth/session（workspace探测）原始响应报文:' in content
+    assert '检测到已有账号代理，优先复用历史代理登录上下文' in content
+    assert 'engine.bootstrap_login_context(' in content
+    assert 'access_token=str(getattr(existing_account, "access_token", "") or "").strip()' in content
