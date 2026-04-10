@@ -707,7 +707,30 @@
         </div>
     </div>
 
+    <div class="modal" id="account-inbox-modal" data-backdrop-close="true" data-escape-close="true">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>📬 账号收件箱</h3>
+                <button class="modal-close" id="close-account-inbox-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="account-inbox-meta" style="margin-bottom: 12px; color: var(--text-muted);">加载中...</div>
+                <div id="account-inbox-list" class="inbox-message-list">
+                    <div class="empty-state">
+                        <div class="skeleton skeleton-text"></div>
+                        <div class="skeleton skeleton-text" style="width: 80%;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="refresh-account-inbox-btn">刷新</button>
+                <button type="button" class="btn btn-secondary" id="cancel-account-inbox-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/utils.js?v={{ static_version }}"></script>
+    <script src="/static/js/inbox_preview.js?v={{ static_version }}"></script>
     <script src="/static/js/accounts.js?v={{ static_version }}"></script>
     {% include "partials/site_footer.html" %}
 </body>

@@ -19,6 +19,20 @@ def test_accounts_js_contains_manual_login_endpoints():
     assert "/accounts/manual-login/inbox-code" in content
 
 
+def test_accounts_page_contains_inbox_preview_modal():
+    content = (ROOT / "templates" / "accounts.html").read_text(encoding="utf-8")
+    assert "account-inbox-modal" in content
+    assert "account-inbox-list" in content
+    assert "refresh-account-inbox-btn" in content
+
+
+def test_accounts_js_contains_inbox_preview_entrypoints():
+    content = (ROOT / "static" / "js" / "accounts.js").read_text(encoding="utf-8")
+    assert "openAccountInbox" in content
+    assert "toggleAccountInboxMessageDetails" in content
+    assert "/accounts/${currentAccountInboxId}/inbox?limit=5" in content
+
+
 def test_accounts_js_contains_per_account_relogin_entry():
     content = (ROOT / "static" / "js" / "accounts.js").read_text(encoding="utf-8")
     assert "reloginAccount(" in content

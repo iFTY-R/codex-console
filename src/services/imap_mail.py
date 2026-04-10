@@ -389,12 +389,15 @@ class ImapMailService(LegacyImapMailService):
                 from_addr = self._decode_str(msg.get("From", ""))
                 received_at = self._decode_str(msg.get("Date", ""))
                 body = self._get_text_body(msg)
+                html = self._get_html_body(msg)
                 snippet = re.sub(r"\s+", " ", body).strip()[:200]
                 messages.append({
                     "id": str(uid or seq_id),
                     "subject": subject,
                     "from": from_addr,
                     "received_at": received_at,
+                    "body": body,
+                    "html": html,
                     "snippet": snippet,
                     "is_seen": "\\Seen" in flags_raw,
                 })

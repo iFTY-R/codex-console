@@ -10,6 +10,7 @@ def test_accounts_route_contains_manual_login_endpoints():
     assert '/manual-login/tasks/{task_id}' in content
     assert '/manual-login/tasks/{task_id}/confirm-overwrite' in content
     assert '/manual-login/inbox-code' in content
+    assert '/{account_id}/inbox' in content
 
 
 def test_manual_login_service_contains_core_flow_markers():

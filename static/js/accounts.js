@@ -28,6 +28,8 @@ let manualLoginTaskId = '';
 let manualLoginPollTimer = null;
 let manualLoginOverwriteHandled = false;
 let manualLoginServicesLoaded = false;
+let currentAccountInboxId = null;
+let accountInboxPreview = null;
 const TASK_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const activeBatchTasks = {
     refresh: null,
@@ -288,6 +290,12 @@ const elements = {
     manualLoginEmailPill: document.getElementById('manual-login-email-pill'),
     manualLoginLog: document.getElementById('manual-login-log'),
     manualLoginResult: document.getElementById('manual-login-result'),
+    accountInboxModal: document.getElementById('account-inbox-modal'),
+    closeAccountInboxModal: document.getElementById('close-account-inbox-modal'),
+    cancelAccountInboxBtn: document.getElementById('cancel-account-inbox-btn'),
+    refreshAccountInboxBtn: document.getElementById('refresh-account-inbox-btn'),
+    accountInboxMeta: document.getElementById('account-inbox-meta'),
+    accountInboxList: document.getElementById('account-inbox-list'),
 };
 
 // 初始化
@@ -299,6 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadAutoQuickRefreshSettings({ silent: true });
     }, 30000);
     initEventListeners();
+    initAccountInboxPreview();
     updateBatchButtons();  // 初始化按钮状态
     renderSelectAllBanner();
     updateManualLoginModeUI();
@@ -462,12 +471,41 @@ function initEventListeners() {
     elements.manualLoginInboxBtn?.addEventListener('click', queryManualLoginInboxCode);
     elements.manualLoginStopBtn?.addEventListener('click', stopManualLoginTask);
     elements.manualLoginResetBtn?.addEventListener('click', resetManualLoginForm);
+    elements.closeAccountInboxModal?.addEventListener('click', closeAccountInboxModal);
+    elements.cancelAccountInboxBtn?.addEventListener('click', closeAccountInboxModal);
+    elements.refreshAccountInboxBtn?.addEventListener('click', () => accountInboxPreview?.refresh());
+    elements.accountInboxModal?.addEventListener('click', (e) => {
+        if (e.target === elements.accountInboxModal) {
+            closeAccountInboxModal();
+        }
+    });
 
     // 点击其他地方关闭下拉菜单
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
         uploadMenu.classList.remove('active');
         document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    });
+}
+
+function initAccountInboxPreview() {
+    if (accountInboxPreview || !window.InboxPreview) return;
+    accountInboxPreview = window.InboxPreview.createInboxPreviewController({
+        modal: elements.accountInboxModal,
+        meta: elements.accountInboxMeta,
+        list: elements.accountInboxList,
+        toggleDetailsHandlerName: 'toggleAccountInboxMessageDetails',
+        invalidTargetMessage: '账号 ID 无效',
+        loadingText: '正在加载收件箱...',
+        emptyDescription: '当前账号收件箱未查到最近邮件',
+        fetchInboxData: async (accountId) => {
+            currentAccountInboxId = Number(accountId || 0) || null;
+            return await api.get(`/accounts/${currentAccountInboxId}/inbox?limit=5`);
+        },
+        formatMeta: (data) => {
+            const mailbox = data?.mailbox ? ` | 收件箱：${data.mailbox}` : '';
+            return `账号：${data?.account_email || '-'}（${data?.email_service || '-'}）${mailbox} | 最近 ${Number(data?.limit || 5)} 封`;
+        },
     });
 }
 
@@ -1179,7 +1217,7 @@ function renderAccounts(accounts) {
             <td>
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="viewAccount(${account.id})">详情</button>
-                    <button class="btn btn-secondary btn-sm" onclick="checkInboxCode(${account.id})">收件箱</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openAccountInbox(${account.id})">收件箱</button>
                     <div class="dropdown" style="position:relative;">
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
@@ -2704,6 +2742,24 @@ function toggleMoreMenu(btn) {
 function closeMoreMenu(el) {
     const menu = el.closest('.dropdown-menu');
     if (menu) menu.classList.remove('active');
+}
+
+function closeAccountInboxModal() {
+    currentAccountInboxId = null;
+    accountInboxPreview?.close();
+}
+
+function toggleAccountInboxMessageDetails(messageId) {
+    accountInboxPreview?.toggleDetails(messageId);
+}
+
+async function openAccountInbox(accountId) {
+    initAccountInboxPreview();
+    try {
+        await accountInboxPreview?.open(accountId);
+    } catch (error) {
+        // 失败提示已在共享控制器中统一处理，这里只负责吞掉异常，避免重复报错。
+    }
 }
 
 // 保存账号 Cookies

@@ -3,6 +3,8 @@
 """
 
 import logging
+import re
+from html import unescape
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -18,6 +20,14 @@ from ...services import EmailServiceFactory, EmailServiceType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+INVITE_URL_RE = re.compile(r"https?://[^\s<>'\"()]+", re.IGNORECASE)
+HTML_HREF_RE = re.compile(r"""href=["']([^"'<>]+)["']""", re.IGNORECASE)
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+HTML_LINEBREAK_RE = re.compile(r"(?i)<\s*(br|/p|/div|/li|/tr|/h\d)\b[^>]*>")
+CHATGPT_INVITE_HINTS = ("invite", "invitation", "join", "workspace", "team", "accept")
+CHATGPT_INVITE_SKIP_HINTS = ("unsubscribe", "privacy", "help", "support", "preferences", "settings")
+CHATGPT_INVITE_SEMANTIC_HINTS = ("邀请", "invited", "invite you", "accept invite", "加入该工作空间", "加入工作空间")
 
 
 # ============== Pydantic Models ==============
@@ -153,6 +163,142 @@ def _coerce_message_mailbox(message: Dict[str, Any], mailbox: str) -> bool:
     return False
 
 
+def _normalize_plain_text(value: Any) -> str:
+    """保留换行的纯文本归一化，供详情区直接展示。"""
+    text = unescape(str(value or ""))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _html_to_text(value: Any) -> str:
+    """把 HTML 片段转成适合 UI 展示的纯文本，同时尽量保留段落换行。"""
+    text = unescape(str(value or ""))
+    text = HTML_LINEBREAK_RE.sub("\n", text)
+    text = HTML_TAG_RE.sub(" ", text)
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _looks_like_html(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text and re.search(r"<[a-zA-Z!/][^>]*>", text))
+
+
+def _truncate_text(value: Any, limit: int = 240) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _json_safe_value(value: Any) -> Any:
+    """
+    将服务侧原始消息转换成可 JSON 序列化的结构，避免 bytes/对象导致接口报错。
+    这里不主动裁剪字段，只做“保形 + 可序列化”处理。
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(item) for item in value]
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        try:
+            return isoformat()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _extract_text_candidate(value: Any) -> str:
+    """从任意字段里尽量提取纯文本正文。"""
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        for key in ("text", "plain_text", "plain", "content", "body", "value"):
+            candidate = _extract_text_candidate(value.get(key))
+            if candidate:
+                return candidate
+        html_candidate = _extract_html_candidate(value)
+        return _html_to_text(html_candidate) if html_candidate else ""
+    if isinstance(value, list):
+        parts = [_extract_text_candidate(item) for item in value]
+        return "\n\n".join(part for part in parts if part).strip()
+    normalized = _normalize_plain_text(value)
+    if _looks_like_html(normalized):
+        return ""
+    return normalized
+
+
+def _extract_html_candidate(value: Any) -> str:
+    """从任意字段里尽量提取 HTML 正文。"""
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        for key in ("html", "content_html", "body_html", "markup"):
+            candidate = _extract_html_candidate(value.get(key))
+            if candidate:
+                return candidate
+        for key in ("content", "body", "value", "text"):
+            candidate = value.get(key)
+            if _looks_like_html(candidate):
+                return str(candidate).strip()
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            candidate = _extract_html_candidate(item)
+            if candidate:
+                return candidate
+        return ""
+    text = str(value or "").strip()
+    return text if _looks_like_html(text) else ""
+
+
+def _extract_message_text_body(raw: Dict[str, Any]) -> str:
+    for key in ("text", "body_text", "plain_text", "plain", "body_preview", "preview", "intro"):
+        candidate = _extract_text_candidate(raw.get(key))
+        if candidate:
+            return candidate
+    for key in ("body", "content"):
+        candidate = _extract_text_candidate(raw.get(key))
+        if candidate:
+            return candidate
+    html_body = _extract_message_html_body(raw)
+    if html_body:
+        return _html_to_text(html_body)
+    return _extract_text_candidate(raw.get("raw"))
+
+
+def _extract_message_html_body(raw: Dict[str, Any]) -> str:
+    for key in ("html", "body_html", "content_html"):
+        candidate = _extract_html_candidate(raw.get(key))
+        if candidate:
+            return candidate
+    for key in ("body", "content", "raw"):
+        candidate = _extract_html_candidate(raw.get(key))
+        if candidate:
+            return candidate
+    return ""
+
+
+def _build_safe_preview(raw: Dict[str, Any], text_body: str, html_body: str) -> str:
+    for key in ("snippet", "preview", "body_preview", "intro"):
+        preview = _normalize_invite_text(raw.get(key))
+        if preview:
+            return _truncate_text(preview, limit=240)
+    if text_body:
+        return _truncate_text(_normalize_invite_text(text_body), limit=240)
+    if html_body:
+        return _truncate_text(_normalize_invite_text(html_body), limit=240)
+    return ""
+
+
 def _serialize_inbox_message(message: Dict[str, Any]) -> Dict[str, Any]:
     raw = dict(message or {})
     subject = str(
@@ -176,15 +322,21 @@ def _serialize_inbox_message(message: Dict[str, Any]) -> Dict[str, Any]:
         or raw.get("date")
         or "-"
     ).strip() or "-"
-    snippet = str(
-        raw.get("snippet")
-        or raw.get("text")
-        or raw.get("intro")
-        or raw.get("content")
-        or ""
-    ).strip()
-    if len(snippet) > 240:
-        snippet = snippet[:240] + "..."
+    text_body = _extract_message_text_body(raw)
+    html_body = _extract_message_html_body(raw)
+    safe_preview = _build_safe_preview(raw, text_body=text_body, html_body=html_body)
+    snippet = safe_preview or _truncate_text(
+        str(
+            raw.get("snippet")
+            or raw.get("text")
+            or raw.get("intro")
+            or raw.get("content")
+            or ""
+        ).strip(),
+        limit=240,
+    )
+    business_invite = _extract_chatgpt_business_invite(raw)
+    raw_message = _json_safe_value(raw)
     return {
         "id": str(raw.get("id") or raw.get("message_id") or raw.get("uuid") or ""),
         "subject": subject,
@@ -192,7 +344,210 @@ def _serialize_inbox_message(message: Dict[str, Any]) -> Dict[str, Any]:
         "received_at": received_at,
         "snippet": snippet,
         "is_seen": bool(raw.get("is_seen") or raw.get("seen") or raw.get("read")),
+        "business_invite": business_invite,
+        # 详情区优先渲染 text_body；html_body 仅供隔离预览，raw_message 用于排障核对字段。
+        "text_body": text_body,
+        "html_body": html_body,
+        "safe_preview": safe_preview,
+        "raw_message": raw_message,
+        "content_meta": {
+            "has_text": bool(text_body),
+            "has_html": bool(html_body),
+            "has_raw": bool(raw_message),
+            "available_fields": list(raw_message.keys()) if isinstance(raw_message, dict) else [],
+        },
     }
+
+
+def _normalize_invite_text(value: Any) -> str:
+    """将正文/HTML片段归一化为便于正则匹配的纯文本。"""
+    text = unescape(str(value or ""))
+    text = HTML_TAG_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _sanitize_invite_field(value: Any) -> Optional[str]:
+    text = _normalize_invite_text(value).strip(" \t\r\n,，。.;；:：|/\\'\"<>[]()")
+    if not text:
+        return None
+    if len(text) > 120:
+        text = text[:117].rstrip() + "..."
+    return text
+
+
+def _collect_message_text_blobs(message: Dict[str, Any]) -> List[str]:
+    blobs: List[str] = []
+    for key in (
+        "subject",
+        "snippet",
+        "text",
+        "body",
+        "content",
+        "html",
+        "raw",
+        "body_preview",
+        "preview",
+        "intro",
+    ):
+        value = message.get(key)
+        if not value:
+            continue
+        if isinstance(value, dict):
+            value = value.get("content") or value.get("text") or value.get("html") or ""
+        elif isinstance(value, list):
+            value = "\n".join(str(item) for item in value if item)
+        normalized = _normalize_invite_text(value)
+        if normalized:
+            blobs.append(normalized)
+    return blobs
+
+
+def _extract_candidate_urls(message: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    for key in ("html", "body", "content", "text", "raw", "snippet"):
+        value = message.get(key)
+        if not value:
+            continue
+        if isinstance(value, list):
+            value = "\n".join(str(item) for item in value if item)
+        elif isinstance(value, dict):
+            value = value.get("content") or value.get("text") or value.get("html") or ""
+        raw_text = str(value or "")
+        for regex in (HTML_HREF_RE, INVITE_URL_RE):
+            for match in regex.findall(raw_text):
+                candidate = unescape(str(match or "")).strip().rstrip(").,;>\"'")
+                if candidate:
+                    urls.append(candidate)
+    # 保持顺序去重，优先正文里第一个可用链接。
+    unique_urls: List[str] = []
+    seen = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        unique_urls.append(url)
+    return unique_urls
+
+
+def _pick_best_invite_url(message: Dict[str, Any], text_blob: str) -> Optional[str]:
+    best_url = None
+    best_score = -1
+    text_lower = text_blob.lower()
+    for url in _extract_candidate_urls(message):
+        lowered = url.lower()
+        if "chatgpt.com" not in lowered:
+            continue
+        if any(skip in lowered for skip in CHATGPT_INVITE_SKIP_HINTS):
+            continue
+        score = 0
+        score += 3
+        if any(hint in lowered for hint in CHATGPT_INVITE_HINTS):
+            score += 4
+        if any(param in lowered for param in ("inv_ws_name=", "accept_wid=", "wid=", "inv_email=")):
+            score += 5
+        if "/auth/login" in lowered:
+            score += 2
+        if "chatgpt business" in text_lower or "chatgpt team" in text_lower:
+            score += 2
+        if "invite" in text_lower or "邀请" in text_lower:
+            score += 1
+        if score > best_score:
+            best_score = score
+            best_url = url
+    return best_url if best_score > 0 else None
+
+
+def _extract_inviter_and_workspace(text_blob: str) -> tuple[Optional[str], Optional[str]]:
+    inviter = None
+    workspace_name = None
+
+    combined_patterns = [
+        re.compile(
+            r"(?P<inviter>[^()，。\n\r]{1,80}?)\s*(?:\([^)]*\))?\s*已邀请你在\s*工作空间(?P<workspace>[^，。\s\n\r]{1,120})中使用\s*ChatGPT\s*Business",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<inviter>[^()，。\n\r]{1,80}?)\s*(?:\([^)]*\))?\s*已邀请你使用\s*ChatGPT\s*Business",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<inviter>[^.\n\r]{1,80}?)\s+has invited you to join\s+(?P<workspace>[^.\n\r]{1,120}?)\s+on\s+ChatGPT(?:\s+Business|\s+Team)?",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<inviter>[^.\n\r]{1,80}?)\s+invited you to join(?: the)?\s+(?P<workspace>[^.\n\r]{1,120}?)\s+(?:workspace|team)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<inviter>[^，。\n\r]{1,80}?)邀请你加入(?P<workspace>[^，。\n\r]{1,120}?)(?:工作空间|团队)",
+            re.IGNORECASE,
+        ),
+    ]
+    for pattern in combined_patterns:
+        matched = pattern.search(text_blob)
+        if not matched:
+            continue
+        inviter = _sanitize_invite_field(matched.group("inviter"))
+        workspace_name = _sanitize_invite_field(matched.group("workspace"))
+        if inviter or workspace_name:
+            return inviter, workspace_name
+
+    inviter_patterns = [
+        re.compile(r"(?:邀请人|邀请者|Invited by|Inviter)\s*[:：]\s*(?P<value>[^|•\n\r]{1,120})", re.IGNORECASE),
+        re.compile(r"(?P<value>[^.\n\r]{1,80}?)\s+has invited you", re.IGNORECASE),
+    ]
+    workspace_patterns = [
+        re.compile(r"工作空间(?P<value>[^，。\s\n\r]{1,120})中使用\s*ChatGPT\s*Business", re.IGNORECASE),
+        re.compile(r"(?:工作空间|Workspace(?: Name)?|团队名称)\s*[:：]\s*(?P<value>[^|•\n\r]{1,120})", re.IGNORECASE),
+        re.compile(r"join\s+(?P<value>[^.\n\r]{1,120}?)\s+on\s+ChatGPT(?:\s+Business|\s+Team)?", re.IGNORECASE),
+        re.compile(r"加入(?P<value>[^，。\n\r]{1,120}?)(?:工作空间|团队)", re.IGNORECASE),
+    ]
+    for pattern in inviter_patterns:
+        matched = pattern.search(text_blob)
+        if matched:
+            inviter = _sanitize_invite_field(matched.group("value"))
+            if inviter:
+                break
+    for pattern in workspace_patterns:
+        matched = pattern.search(text_blob)
+        if matched:
+            workspace_name = _sanitize_invite_field(matched.group("value"))
+            if workspace_name:
+                break
+    return inviter, workspace_name
+
+
+def _extract_chatgpt_business_invite(message: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """从收件箱邮件里尽量提取 ChatGPT Business 邀请信息。"""
+    text_blobs = _collect_message_text_blobs(message)
+    if not text_blobs:
+        return None
+    text_blob = "\n".join(text_blobs)
+    text_lower = text_blob.lower()
+    if not any(keyword in text_lower for keyword in ("chatgpt", "openai", "workspace", "invite", "邀请")):
+        return None
+    subject_lower = str(message.get("subject") or "").strip().lower()
+    has_invite_semantics = any(hint in text_lower for hint in CHATGPT_INVITE_SEMANTIC_HINTS) or any(
+        hint in subject_lower for hint in ("邀请", "invited", "invite")
+    )
+
+    invite_url = _pick_best_invite_url(message, text_blob)
+    inviter, workspace_name = _extract_inviter_and_workspace(text_blob)
+    if not has_invite_semantics and not (
+        invite_url and any(token in invite_url.lower() for token in ("inv_ws_name=", "accept_wid=", "inv_email="))
+    ):
+        return None
+    if not invite_url and not inviter and not workspace_name:
+        return None
+    result: Dict[str, str] = {}
+    if invite_url:
+        result["url"] = invite_url
+    if inviter:
+        result["inviter"] = inviter
+    if workspace_name:
+        result["workspace_name"] = workspace_name
+    return result or None
 
 
 def _resolve_service_inbox(service_type: EmailServiceType, email_service) -> tuple[Optional[str], List[Dict[str, Any]]]:
@@ -537,15 +892,20 @@ async def get_email_service_inbox(
 
         try:
             mailbox, messages = _resolve_service_inbox(service_type, email_service)
+            # 调试收件箱解析问题时，直接把接口响应打印到服务端日志，方便核对字段结构。
+            # logger.info("邮箱服务收件箱响应: %s", messages)
             serialized = [_serialize_inbox_message(message) for message in (messages or [])][:limit]
+            response_payload = {
+                "success": True,
+                "service_id": service.id,
+                "service_name": service.name,
+                "service_type": service.service_type,
+                "limit": limit,
+                "mailbox": mailbox or None,
+                "messages": serialized,
+            }
             return InboxMessagesResponse(
-                success=True,
-                service_id=service.id,
-                service_name=service.name,
-                service_type=service.service_type,
-                limit=limit,
-                mailbox=mailbox or None,
-                messages=serialized,
+                **response_payload,
             )
         except NotImplementedError:
             raise HTTPException(status_code=400, detail="当前邮箱服务暂不支持收件箱预览")

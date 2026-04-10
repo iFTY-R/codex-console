@@ -8,6 +8,7 @@ let customServices = [];  // 合并 moe_mail + temp_mail + cloudmail + duck_mail
 let selectedOutlook = new Set();
 let selectedCustom = new Set();
 let currentInboxServiceId = null;
+let serviceInboxPreview = null;
 
 // DOM 元素
 const elements = {
@@ -113,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCustomServices();
     loadTempmailConfig();
     initEventListeners();
+    initServiceInboxPreview();
 });
 
 // 事件监听
@@ -183,9 +185,7 @@ function initEventListeners() {
     // 服务收件箱
     elements.closeServiceInboxModal?.addEventListener('click', closeServiceInboxModal);
     elements.cancelServiceInboxBtn?.addEventListener('click', closeServiceInboxModal);
-    elements.refreshServiceInboxBtn?.addEventListener('click', () => {
-        if (currentInboxServiceId) openServiceInbox(currentInboxServiceId);
-    });
+    elements.refreshServiceInboxBtn?.addEventListener('click', () => serviceInboxPreview?.refresh());
     elements.serviceInboxModal?.addEventListener('click', (e) => {
         if (e.target === elements.serviceInboxModal) closeServiceInboxModal();
     });
@@ -213,70 +213,50 @@ function closeEmailMoreMenu(el) {
     if (menu) menu.classList.remove('active');
 }
 
+function initServiceInboxPreview() {
+    if (serviceInboxPreview || !window.InboxPreview) return;
+    serviceInboxPreview = window.InboxPreview.createInboxPreviewController({
+        modal: elements.serviceInboxModal,
+        meta: elements.serviceInboxMeta,
+        list: elements.serviceInboxList,
+        toggleDetailsHandlerName: 'toggleInboxMessageDetails',
+        invalidTargetMessage: '服务 ID 无效',
+        loadingText: '正在加载收件箱...',
+        emptyDescription: '当前服务收件箱未查到最近邮件',
+        fetchInboxData: async (serviceId) => {
+            currentInboxServiceId = Number(serviceId || 0) || null;
+            return await api.get(`/email-services/${currentInboxServiceId}/inbox?limit=5`);
+        },
+        formatMeta: (data) => {
+            const mailbox = data?.mailbox ? ` | 邮箱：${data.mailbox}` : '';
+            return `服务：${data?.service_name || '-'}（${data?.service_type || '-'}）${mailbox} | 最近 ${Number(data?.limit || 5)} 封`;
+        },
+    });
+}
+
 function closeServiceInboxModal() {
     currentInboxServiceId = null;
-    elements.serviceInboxModal?.classList.remove('active');
+    serviceInboxPreview?.close();
+}
+
+function buildSafeInboxPreviewSrcdoc(htmlBody) {
+    return window.InboxPreview?.buildSafeInboxPreviewSrcdoc(htmlBody) || '';
 }
 
 function renderInboxMessages(messages = []) {
-    if (!Array.isArray(messages) || messages.length === 0) {
-        return `
-            <div class="empty-state">
-                <div class="empty-state-icon">📭</div>
-                <div class="empty-state-title">暂无邮件</div>
-                <div class="empty-state-description">当前服务收件箱未查到最近邮件</div>
-            </div>
-        `;
-    }
-    return messages.map((message) => `
-        <article class="inbox-message-item">
-            <div class="inbox-message-head">
-                <span>${escapeHtml(String(message.from || '-'))}</span>
-                <span>${escapeHtml(String(message.received_at || '-'))}${message.is_seen ? ' · 已读' : ' · 未读'}</span>
-            </div>
-            <div class="inbox-message-subject">${escapeHtml(String(message.subject || '-'))}</div>
-            <div class="inbox-message-snippet">${escapeHtml(String(message.snippet || '（无正文预览）'))}</div>
-        </article>
-    `).join('');
+    return serviceInboxPreview?.renderMessages(messages) || '';
+}
+
+function toggleInboxMessageDetails(messageId) {
+    serviceInboxPreview?.toggleDetails(messageId);
 }
 
 async function openServiceInbox(serviceId) {
-    currentInboxServiceId = Number(serviceId || 0) || null;
-    if (!currentInboxServiceId) {
-        toast.error('服务 ID 无效');
-        return;
-    }
-    if (elements.serviceInboxMeta) elements.serviceInboxMeta.textContent = '正在加载收件箱...';
-    if (elements.serviceInboxList) {
-        elements.serviceInboxList.innerHTML = `
-            <div class="empty-state">
-                <div class="skeleton skeleton-text"></div>
-                <div class="skeleton skeleton-text" style="width: 80%;"></div>
-            </div>
-        `;
-    }
-    elements.serviceInboxModal?.classList.add('active');
+    initServiceInboxPreview();
     try {
-        const data = await api.get(`/email-services/${currentInboxServiceId}/inbox?limit=5`);
-        if (elements.serviceInboxMeta) {
-            const mailbox = data?.mailbox ? ` | 邮箱：${data.mailbox}` : '';
-            elements.serviceInboxMeta.textContent = `服务：${data?.service_name || '-'}（${data?.service_type || '-'}）${mailbox} | 最近 ${Number(data?.limit || 5)} 封`;
-        }
-        if (elements.serviceInboxList) {
-            elements.serviceInboxList.innerHTML = renderInboxMessages(data?.messages || []);
-        }
+        await serviceInboxPreview?.open(serviceId);
     } catch (error) {
-        if (elements.serviceInboxMeta) elements.serviceInboxMeta.textContent = '加载失败';
-        if (elements.serviceInboxList) {
-            elements.serviceInboxList.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">⚠️</div>
-                    <div class="empty-state-title">收件箱加载失败</div>
-                    <div class="empty-state-description">${escapeHtml(error.message || '未知错误')}</div>
-                </div>
-            `;
-        }
-        toast.error('读取收件箱失败: ' + error.message);
+        // 失败提示已在共享控制器中统一处理，这里避免重复弹 toast。
     }
 }
 
@@ -515,20 +495,20 @@ async function loadCustomServices() {
                 <td><input type="checkbox" data-id="${service.id}" ${selectedCustom.has(service.id) ? 'checked' : ''}></td>
                 <td>${escapeHtml(service.name)}</td>
                 <td>${getCustomServiceTypeBadge(service._subType)}</td>
-                <td style="font-size: 0.75rem; min-width: 400px;">${getCustomServiceAddress(service)}</td>
+                <td class="custom-service-address-cell">${getCustomServiceAddress(service)}</td>
                 <td>--</td>
                 <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '✅' : '⭕'}</td>
                 <td>${service.priority}</td>
                 <td>${format.date(service.last_used)}</td>
                 <td>
-                    <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
+                    <div class="custom-service-action-group">
                         <button class="btn btn-secondary btn-sm" onclick="editCustomService(${service.id}, '${service._subType}')">编辑</button>
+                        <button class="btn btn-secondary btn-sm" onclick="openServiceInbox(${service.id})">收件箱</button>
                         <div class="dropdown" style="position:relative;">
                             <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleEmailMoreMenu(this)">更多</button>
                             <div class="dropdown-menu" style="min-width:80px;">
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);toggleService(${service.id}, ${!service.enabled})">${service.enabled ? '禁用' : '启用'}</a>
                                 <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);testService(${service.id})">测试</a>
-                                <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);openServiceInbox(${service.id})">收件箱</a>
                             </div>
                         </div>
                         <button class="btn btn-danger btn-sm" onclick="deleteService(${service.id}, '${escapeHtml(service.name)}')">删除</button>

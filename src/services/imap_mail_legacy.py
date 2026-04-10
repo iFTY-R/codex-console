@@ -68,20 +68,48 @@ class ImapMailService(BaseEmailService):
 
     def _get_text_body(self, msg) -> str:
         """提取邮件纯文本内容"""
-        body = ""
+        body_parts = []
         if msg.is_multipart():
             for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    charset = part.get_content_charset() or "utf-8"
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        body += payload.decode(charset, errors="replace")
+                content_type = (part.get_content_type() or "").lower()
+                if content_type not in ("text/plain", "text/html"):
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    continue
+                text = payload.decode(charset, errors="replace")
+                if content_type == "text/html":
+                    text = re.sub(r"<[^>]+>", " ", text)
+                body_parts.append(text)
         else:
             charset = msg.get_content_charset() or "utf-8"
             payload = msg.get_payload(decode=True)
             if payload:
                 body = payload.decode(charset, errors="replace")
-        return body
+                if (msg.get_content_type() or "").lower() == "text/html":
+                    body = re.sub(r"<[^>]+>", " ", body)
+                body_parts.append(body)
+        return "\n".join(part for part in body_parts if part).strip()
+
+    def _get_html_body(self, msg) -> str:
+        """提取邮件 HTML 正文，供上层做链接解析。"""
+        html_parts = []
+        if msg.is_multipart():
+            for part in msg.walk():
+                if (part.get_content_type() or "").lower() != "text/html":
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                payload = part.get_payload(decode=True)
+                if payload:
+                    html_parts.append(payload.decode(charset, errors="replace"))
+        else:
+            if (msg.get_content_type() or "").lower() == "text/html":
+                charset = msg.get_content_charset() or "utf-8"
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    html_parts.append(payload.decode(charset, errors="replace"))
+        return "\n".join(part for part in html_parts if part).strip()
 
     def _is_openai_sender(self, from_addr: str) -> bool:
         """判断发件人是否为 OpenAI"""
@@ -254,12 +282,15 @@ class ImapMailService(BaseEmailService):
                 from_addr = self._decode_str(msg.get("From", ""))
                 received_at = self._decode_str(msg.get("Date", ""))
                 body = self._get_text_body(msg)
+                html = self._get_html_body(msg)
                 snippet = re.sub(r"\s+", " ", body).strip()[:200]
                 messages.append({
                     "id": msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id),
                     "subject": subject,
                     "from": from_addr,
                     "received_at": received_at,
+                    "body": body,
+                    "html": html,
                     "snippet": snippet,
                     "is_seen": "\\Seen" in flags_raw,
                 })

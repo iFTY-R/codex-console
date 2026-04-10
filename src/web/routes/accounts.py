@@ -218,6 +218,16 @@ class ManualLoginInboxCodeRequest(BaseModel):
     email_service_id: Optional[int] = None
 
 
+class AccountInboxMessagesResponse(BaseModel):
+    success: bool
+    account_id: int
+    account_email: str
+    email_service: str
+    limit: int
+    mailbox: Optional[str] = None
+    messages: List[Dict[str, Any]] = []
+
+
 class AccountImportItem(BaseModel):
     """账号导入项（支持按账号详情字段导入）"""
     email: str
@@ -2609,6 +2619,116 @@ def _build_inbox_config(db, service_type, email: str) -> dict:
     if "api_url" in cfg and "base_url" not in cfg:
         cfg["base_url"] = cfg.pop("api_url")
     return cfg
+
+
+def _resolve_account_inbox_messages(service_type, email_service, account: Account, limit: int = 5):
+    """
+    根据账号自身绑定的邮箱引用读取收件箱。
+
+    邮箱管理页是“服务视角”，账号页是“具体账号视角”，这里优先复用账号记录中的
+    `email_service_id` 与 `email` 来定位当前账号对应的收件箱。
+    """
+    from ...services import EmailServiceType
+    from .email import _coerce_message_mailbox
+
+    mailbox = str(getattr(account, "email", "") or "").strip()
+    email_ref = str(getattr(account, "email_service_id", "") or "").strip()
+
+    def _get_messages(target_ref: str):
+        if not target_ref:
+            return []
+        try:
+            return email_service.get_email_messages(target_ref, limit=limit) or []
+        except TypeError:
+            return email_service.get_email_messages(target_ref) or []
+
+    if service_type == EmailServiceType.IMAP_MAIL:
+        return mailbox or None, _get_messages(mailbox)
+
+    if email_ref:
+        messages = _get_messages(email_ref)
+        if mailbox and messages:
+            filtered = [msg for msg in messages if _coerce_message_mailbox(msg, mailbox)]
+            return mailbox or None, filtered if filtered else messages
+        return mailbox or email_ref or None, messages
+
+    try:
+        email_entries = email_service.list_emails(limit=limit)
+    except TypeError:
+        email_entries = email_service.list_emails()
+
+    if not isinstance(email_entries, list):
+        email_entries = []
+
+    mailbox_lower = mailbox.lower()
+    preferred_entry = None
+    fallback_entry = None
+    for item in email_entries:
+        candidate_ref = str(item.get("id") or item.get("service_id") or item.get("email") or "").strip()
+        candidate_mailbox = str(item.get("email") or item.get("address") or "").strip()
+        if not fallback_entry and candidate_ref:
+            fallback_entry = (candidate_ref, candidate_mailbox)
+        if mailbox_lower and candidate_mailbox.lower() == mailbox_lower:
+            preferred_entry = (candidate_ref, candidate_mailbox)
+            break
+
+    target_ref, resolved_mailbox = preferred_entry or fallback_entry or ("", mailbox)
+    if not target_ref:
+        return mailbox or None, []
+
+    messages = _get_messages(target_ref)
+    if mailbox and messages:
+        filtered = [msg for msg in messages if _coerce_message_mailbox(msg, mailbox)]
+        return resolved_mailbox or mailbox or None, filtered if filtered else messages
+    return resolved_mailbox or mailbox or None, messages
+
+
+@router.get("/{account_id}/inbox", response_model=AccountInboxMessagesResponse)
+async def get_account_inbox(
+    account_id: int,
+    limit: int = Query(5, ge=1, le=20, description="默认返回最近前几封邮件"),
+):
+    """读取账号绑定邮箱的收件箱预览，结构与邮箱管理页保持一致。"""
+    from ...services import EmailServiceFactory, EmailServiceType
+    from .email import _serialize_inbox_message
+
+    with get_db() as db:
+        account = crud.get_account_by_id(db, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+
+        try:
+            service_type = EmailServiceType(account.email_service)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"不支持的邮箱服务类型: {account.email_service}")
+
+        config = _build_inbox_config(db, service_type, account.email)
+        if config is None:
+            raise HTTPException(status_code=400, detail="未找到可用的邮箱服务配置")
+
+        try:
+            email_service = EmailServiceFactory.create(service_type, config, name=f"account_inbox_{account.id}")
+        except Exception as exc:
+            logger.error(f"初始化账号收件箱失败: {exc}")
+            raise HTTPException(status_code=400, detail=f"初始化邮箱服务失败: {exc}")
+
+        try:
+            mailbox, messages = _resolve_account_inbox_messages(service_type, email_service, account, limit=limit)
+            serialized = [_serialize_inbox_message(message) for message in (messages or [])][:limit]
+            return AccountInboxMessagesResponse(
+                success=True,
+                account_id=account.id,
+                account_email=account.email,
+                email_service=account.email_service,
+                limit=limit,
+                mailbox=mailbox or None,
+                messages=serialized,
+            )
+        except NotImplementedError:
+            raise HTTPException(status_code=400, detail="当前邮箱服务暂不支持收件箱预览")
+        except Exception as exc:
+            logger.error(f"读取账号收件箱失败: {exc}")
+            raise HTTPException(status_code=500, detail=f"读取收件箱失败: {exc}")
 
 
 @router.post("/{account_id}/inbox-code")

@@ -594,6 +594,185 @@ body {
     z-index: 300;
 }
 
+/*
+ * 收件箱预览共享样式
+ * 账号管理与邮箱管理共用同一套消息列表/详情预览布局，避免两页重复维护样式。
+ */
+.inbox-message-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 480px;
+    overflow-y: auto;
+}
+
+.inbox-message-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--surface-hover);
+}
+
+.inbox-message-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.inbox-message-subject {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.inbox-message-snippet {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.55;
+}
+
+.inbox-message-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.inbox-message-details {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.inbox-detail-section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.inbox-detail-title {
+    padding: 10px 12px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--surface-hover);
+    border-bottom: 1px solid var(--border);
+}
+
+.inbox-detail-body {
+    padding: 12px;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.6;
+}
+
+.inbox-detail-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow: auto;
+}
+
+.inbox-empty-detail {
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.inbox-html-preview-frame {
+    display: block;
+    width: 100%;
+    min-height: 220px;
+    border: 0;
+    background: #fff;
+}
+
+.inbox-raw-details summary {
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--surface-hover);
+    user-select: none;
+}
+
+.inbox-raw-json {
+    margin: 0;
+    padding: 12px;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    background: var(--surface);
+}
+
+.inbox-invite-card {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-hover);
+}
+
+.inbox-invite-title {
+    margin-bottom: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.inbox-invite-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.inbox-invite-label {
+    color: var(--text-muted);
+    min-width: 56px;
+}
+
+.inbox-invite-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+    word-break: break-all;
+}
+
+.inbox-invite-link:hover {
+    text-decoration: underline;
+}
+
+.custom-service-address-cell {
+    max-width: 300px;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    word-break: break-all;
+}
+
+.custom-service-action-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    white-space: nowrap;
+}
+
 /* ============================================
    表单元素
    ============================================ */

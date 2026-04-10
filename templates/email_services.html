@@ -20,9 +20,14 @@
             padding: 12px;
             background: var(--surface-hover);
         }
+        .inbox-message-item.is-expanded {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18);
+        }
         .inbox-message-head {
             display: flex;
             justify-content: space-between;
+            align-items: center;
             gap: 8px;
             margin-bottom: 6px;
             font-size: 0.82rem;
@@ -39,6 +44,113 @@
             color: var(--text-secondary);
             font-size: 0.84rem;
             line-height: 1.55;
+        }
+        .inbox-message-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 10px;
+        }
+        .inbox-message-details {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .inbox-detail-section {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            overflow: hidden;
+        }
+        .inbox-detail-title {
+            padding: 10px 12px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            background: var(--surface-hover);
+            border-bottom: 1px solid var(--border);
+        }
+        .inbox-detail-body {
+            padding: 12px;
+            color: var(--text-secondary);
+            font-size: 0.84rem;
+            line-height: 1.6;
+        }
+        .inbox-detail-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 240px;
+            overflow: auto;
+        }
+        .inbox-empty-detail {
+            padding: 12px;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+        .inbox-html-preview-frame {
+            display: block;
+            width: 100%;
+            min-height: 220px;
+            border: 0;
+            background: #fff;
+        }
+        .inbox-raw-details summary {
+            padding: 10px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            background: var(--surface-hover);
+            user-select: none;
+        }
+        .inbox-raw-json {
+            margin: 0;
+            padding: 12px;
+            max-height: 260px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 0.78rem;
+            line-height: 1.55;
+            color: var(--text-secondary);
+            background: var(--surface);
+        }
+        .inbox-invite-card {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface-hover);
+        }
+        .inbox-invite-title {
+            margin-bottom: 8px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .inbox-invite-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 4px;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        .inbox-invite-label {
+            color: var(--text-muted);
+            min-width: 56px;
+        }
+        .inbox-invite-link {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 500;
+            word-break: break-all;
+        }
+        .inbox-invite-link:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -147,12 +259,12 @@
                                     <th style="width: 40px;"><input type="checkbox" id="select-all-custom"></th>
                                     <th>名称</th>
                                     <th style="width: 90px;">类型</th>
-                                    <th style="width: 400px;">地址</th>
+                                    <th style="width: 300px;">地址</th>
                                     <th style="width: 120px;">注册状态</th>
                                     <th style="width: 100px;">状态</th>
                                     <th style="width: 80px;">优先级</th>
                                     <th style="width: 160px;">最后使用</th>
-                                    <th style="width: 180px;">操作</th>
+                                    <th style="width: 260px;">操作</th>
                                 </tr>
                             </thead>
                             <tbody id="custom-services-table">
@@ -768,7 +880,7 @@
     </div>
 
     <div class="modal" id="service-inbox-modal" data-backdrop-close="true" data-escape-close="true">
-        <div class="modal-content" style="max-width: 900px;">
+        <div class="modal-content" style="max-width: 960px;">
             <div class="modal-header">
                 <h3>📬 服务收件箱</h3>
                 <button class="modal-close" id="close-service-inbox-modal">&times;</button>
@@ -791,6 +903,7 @@
 
 
 <script src="/static/js/utils.js?v={{ static_version }}"></script>
+    <script src="/static/js/inbox_preview.js?v={{ static_version }}"></script>
     <script src="/static/js/email_services.js?v={{ static_version }}"></script>
     {% include "partials/site_footer.html" %}
 </body>

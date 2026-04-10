@@ -14,8 +14,17 @@ def test_email_services_page_contains_inbox_modal():
 def test_email_services_js_contains_inbox_entrypoints():
     content = (ROOT / "static" / "js" / "email_services.js").read_text(encoding="utf-8")
     assert "openServiceInbox" in content
+    assert "toggleInboxMessageDetails" in content
+    assert "buildSafeInboxPreviewSrcdoc" in content
     assert "/email-services/${currentInboxServiceId}/inbox?limit=5" in content
     assert content.count("收件箱") >= 2
+
+
+def test_email_services_page_contains_expandable_inbox_detail_ui():
+    content = (ROOT / "templates" / "email_services.html").read_text(encoding="utf-8")
+    assert "inbox-message-details" in content
+    assert "inbox-html-preview-frame" in content
+    assert "inbox-raw-json" in content
 
 
 def test_email_route_and_imap_support_inbox():
