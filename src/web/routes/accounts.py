@@ -2544,10 +2544,111 @@ async def upload_account_to_tm(account_id: int, request: Optional[UploadTMReques
 
 # ============== Inbox Code ==============
 
-def _build_inbox_config(db, service_type, email: str) -> dict:
-    """根据账号邮箱服务类型从数据库构建服务配置（不传 proxy_url）"""
+def _extract_account_service_db_id(account: Account) -> Optional[int]:
+    """
+    尽量从账号额外信息中恢复“实际绑定的邮箱服务配置 ID”。
+
+    手动登录链路会把用户当时选择的邮箱服务 ID 写入 `extra_data.manual_login.service_db_id`。
+    如果这里丢失该绑定，账号页查询收件箱时就只能按同类型服务回退到首个配置，
+    多服务并存时很容易查到别的邮箱。
+    """
+    extra_data = getattr(account, "extra_data", None)
+    if not isinstance(extra_data, dict):
+        return None
+
+    candidates: List[Any] = [
+        extra_data.get("service_db_id"),
+        extra_data.get("email_service_db_id"),
+    ]
+    manual_login_meta = extra_data.get("manual_login")
+    if isinstance(manual_login_meta, dict):
+        candidates.extend(
+            [
+                manual_login_meta.get("service_db_id"),
+                manual_login_meta.get("email_service_db_id"),
+            ]
+        )
+
+    for raw in candidates:
+        try:
+            value = int(str(raw or "").strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _match_email_service_by_account(services: List[Any], account_email: str):
+    """优先按完整邮箱匹配，其次按域名匹配账号对应的邮箱服务配置。"""
+    normalized_email = str(account_email or "").strip().lower()
+    domain = normalized_email.split("@", 1)[1] if "@" in normalized_email else ""
+
+    if normalized_email:
+        for service in services:
+            cfg = service.config or {}
+            cfg_email = str(cfg.get("email") or cfg.get("address") or "").strip().lower()
+            if cfg_email and cfg_email == normalized_email:
+                return service
+
+    if domain:
+        for service in services:
+            cfg = service.config or {}
+            candidate_domains = {
+                str(cfg.get("default_domain") or "").strip().lower(),
+                str(cfg.get("domain") or "").strip().lower(),
+                str(cfg.get("mail_domain") or "").strip().lower(),
+            }
+            candidate_domains.discard("")
+            if domain in candidate_domains:
+                return service
+
+    return None
+
+
+def _select_account_email_service_model(db, service_type, account: Account):
+    """为账号页收件箱选择最贴近账号本身的邮箱服务配置。"""
     from ...database.models import EmailService as EmailServiceModel
+
+    bound_service_db_id = _extract_account_service_db_id(account)
+    if bound_service_db_id:
+        bound_service = (
+            db.query(EmailServiceModel)
+            .filter(
+                EmailServiceModel.id == bound_service_db_id,
+                EmailServiceModel.enabled == True,
+            )
+            .first()
+        )
+        if bound_service and str(bound_service.service_type or "").strip().lower() == service_type.value:
+            return bound_service
+
+    services = (
+        db.query(EmailServiceModel)
+        .filter(
+            EmailServiceModel.service_type == service_type.value,
+            EmailServiceModel.enabled == True,
+        )
+        .order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc())
+        .all()
+    )
+    if not services:
+        return None
+
+    matched_service = _match_email_service_by_account(services, getattr(account, "email", "") or "")
+    return matched_service or services[0]
+
+
+def _build_inbox_config(db, service_type, account: Account) -> dict:
+    """根据账号上下文构建收件箱配置，优先复用账号实际绑定的邮箱服务。"""
     from ...services import EmailServiceType as EST
+
+    selected_service = _select_account_email_service_model(db, service_type, account)
+    if selected_service:
+        cfg = selected_service.config.copy() if selected_service.config else {}
+        if "api_url" in cfg and "base_url" not in cfg:
+            cfg["base_url"] = cfg.pop("api_url")
+        return cfg
 
     if service_type == EST.TEMPMAIL:
         settings = get_settings()
@@ -2567,58 +2668,7 @@ def _build_inbox_config(db, service_type, email: str) -> dict:
             "max_retries": settings.yyds_mail_max_retries,
         }
 
-    if service_type == EST.MOE_MAIL:
-        # 按域名后缀匹配，找不到则取 priority 最小的
-        domain = email.split("@")[1] if "@" in email else ""
-        services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "moe_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-        svc = None
-        for s in services:
-            cfg = s.config or {}
-            if cfg.get("default_domain") == domain or cfg.get("domain") == domain:
-                svc = s
-                break
-        if not svc and services:
-            svc = services[0]
-        if not svc:
-            return None
-        cfg = svc.config.copy()
-        if "api_url" in cfg and "base_url" not in cfg:
-            cfg["base_url"] = cfg.pop("api_url")
-        return cfg
-
-    # 其余服务类型：直接按 service_type 查数据库
-    type_map = {
-        EST.TEMP_MAIL: "temp_mail",
-        EST.DUCK_MAIL: "duck_mail",
-        EST.FREEMAIL: "freemail",
-        EST.IMAP_MAIL: "imap_mail",
-        EST.OUTLOOK: "outlook",
-        EST.LUCKMAIL: "luckmail",
-    }
-    db_type = type_map.get(service_type)
-    if not db_type:
-        return None
-
-    query = db.query(EmailServiceModel).filter(
-        EmailServiceModel.service_type == db_type,
-        EmailServiceModel.enabled == True
-    )
-    if service_type == EST.OUTLOOK:
-        # 按 config.email 匹配账号 email
-        services = query.all()
-        svc = next((s for s in services if (s.config or {}).get("email") == email), None)
-    else:
-        svc = query.order_by(EmailServiceModel.priority.asc()).first()
-
-    if not svc:
-        return None
-    cfg = svc.config.copy() if svc.config else {}
-    if "api_url" in cfg and "base_url" not in cfg:
-        cfg["base_url"] = cfg.pop("api_url")
-    return cfg
+    return None
 
 
 def _resolve_account_inbox_messages(service_type, email_service, account: Account, limit: int = 5):
@@ -2702,7 +2752,7 @@ async def get_account_inbox(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"不支持的邮箱服务类型: {account.email_service}")
 
-        config = _build_inbox_config(db, service_type, account.email)
+        config = _build_inbox_config(db, service_type, account)
         if config is None:
             raise HTTPException(status_code=400, detail="未找到可用的邮箱服务配置")
 
@@ -2746,7 +2796,7 @@ async def get_account_inbox_code(account_id: int):
         except ValueError:
             return {"success": False, "error": "不支持的邮箱服务类型"}
 
-        config = _build_inbox_config(db, service_type, account.email)
+        config = _build_inbox_config(db, service_type, account)
         if config is None:
             return {"success": False, "error": "未找到可用的邮箱服务配置"}
 
